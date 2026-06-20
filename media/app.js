@@ -18,6 +18,7 @@ const STRINGS = {
     sessionSubtitle: "context window usage - live",
     noActiveSessions: "No active sessions",
     toolComparison: "Tool comparison",
+    byModel: "By model",
     tokenShareToday: "token share - today",
     cost: "Cost", requests: "Requests", cacheHit: "Cache hit", liveEst: "Live est.",
     liveTokenRate: "Live token rate",
@@ -61,6 +62,7 @@ const STRINGS = {
     sessionSubtitle: "dung l\u01b0\u1ee3ng context - tr\u1ef1c ti\u1ebfp",
     noActiveSessions: "Kh\u00f4ng c\u00f3 phi\u00ean n\u00e0o \u0111ang ho\u1ea1t \u0111\u1ed9ng",
     toolComparison: "So s\u00e1nh c\u00f4ng c\u1ee5",
+    byModel: "Theo model",
     tokenShareToday: "t\u1ef7 l\u1ec7 token - h\u00f4m nay",
     cost: "Chi ph\u00ed", requests: "Y\u00eau c\u1ea7u", cacheHit: "Cache hit",
     liveTokenRate: "T\u1ed1c \u0111\u1ed9 token tr\u1ef1c ti\u1ebfp",
@@ -104,6 +106,7 @@ const STRINGS = {
     sessionSubtitle: "\u30b3\u30f3\u30c6\u30ad\u30b9\u30c8\u30a6\u30a3\u30f3\u30c9\u30a6\u4f7f\u7528\u91cf - \u30e9\u30a4\u30d6",
     noActiveSessions: "\u30a2\u30af\u30c6\u30a3\u30d6\u306a\u30bb\u30c3\u30b7\u30e7\u30f3\u306f\u3042\u308a\u307e\u305b\u3093",
     toolComparison: "\u30c4\u30fc\u30eb\u6bd4\u8f03",
+    byModel: "\u30e2\u30c7\u30eb\u5225",
     tokenShareToday: "\u30c8\u30fc\u30af\u30f3\u5272\u5408 - \u672c\u65e5",
     cost: "\u30b3\u30b9\u30c8", requests: "\u30ea\u30af\u30a8\u30b9\u30c8", cacheHit: "\u30ad\u30e3\u30c3\u30b7\u30e5\u30d2\u30c3\u30c8",
     liveTokenRate: "\u30e9\u30a4\u30d6\u30c8\u30fc\u30af\u30f3\u30ec\u30fc\u30c8",
@@ -380,7 +383,7 @@ function renderSessionList(sessions) {
       <span style="display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;padding:4px 7px;border-radius:7px;background:${badgeBg};color:${color};font-size:11px;font-weight:600;justify-content:center;">${dot}${badge}</span>
       <div style="flex:0 0 auto;min-width:64px;">
         <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#1d1d1f;font-weight:500;">${(sess.session_id || "").slice(0, 8)}</div>
-        <div style="font-size:11px;color:#9b9ba0;margin-top:2px;">${_shortModel(sess.model)}</div>
+        ${_sessionModelLabel(sess, color)}
       </div>
       <div style="flex:1 1 auto;min-width:0;">
         <div style="display:flex;justify-content:space-between;align-items:center;font-size:11.5px;margin-bottom:5px;">
@@ -417,6 +420,49 @@ function renderToolComparison(state) {
   document.getElementById("cmp-codex-cost").textContent   = codexTok ? fmtCost(state.codex_cost_today || 0) : "$0 (n/a)";
   document.getElementById("cmp-codex-req").textContent    = state.codex_requests_today ?? "-";
   document.getElementById("cmp-codex-cache").textContent  = fmtPct(state.codex_cache_hit_pct);
+
+  _bindClaudeModelTooltip(state.today_by_model || {});
+}
+
+// Hover tooltip on the Claude card: per-model token + cost breakdown for today.
+// Reveals how a mid-session /model switch split the day's spend across models.
+function _bindClaudeModelTooltip(byModel) {
+  const card = document.getElementById("cmp-claude-card");
+  if (!card) return;
+
+  const models = Object.values(byModel)
+    .filter((m) => (m.total || 0) > 0)
+    .sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0));
+
+  let tip = card.querySelector(".cmp-model-tip");
+  if (models.length <= 1) {
+    if (tip) tip.remove();
+    card.style.cursor = "";
+    return;
+  }
+
+  const rows = models.map((m) => {
+    const name = _shortModel(m.model);
+    return `<div style="display:flex;justify-content:space-between;gap:14px;padding:3px 0;">
+      <span style="color:#1d1d1f;">${name}</span>
+      <span style="color:#6e6e73;font-variant-numeric:tabular-nums;">${fmtTok(m.total)} · ${fmtCost(m.cost_usd || 0)}</span>
+    </div>`;
+  }).join("");
+
+  if (!tip) {
+    tip = document.createElement("div");
+    tip.className = "cmp-model-tip";
+    tip.style.cssText =
+      "position:absolute;top:8px;right:8px;z-index:20;min-width:190px;" +
+      "background:#fff;border:1px solid #e6e6e9;border-radius:10px;padding:10px 12px;" +
+      "box-shadow:0 6px 20px rgba(0,0,0,.12);font-size:12px;display:none;";
+    card.appendChild(tip);
+    card.addEventListener("mouseenter", () => { tip.style.display = "block"; });
+    card.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+  }
+  card.style.cursor = "default";
+  tip.innerHTML =
+    `<div style="font-size:11px;color:#9b9ba0;margin-bottom:5px;">${t("byModel", "By model")}</div>` + rows;
 }
 
 function renderLiveChart() {
@@ -745,6 +791,24 @@ function _shortModel(m) {
     .replace("claude-", "")
     .replace("-20251001", "").replace("-20250929", "").replace("-20250722", "")
     .replace(/-\d{8}$/, "");
+}
+
+// Model label for a session card. Active model (last used) is bold; if the user
+// switched models mid-session, prior models are listed below, dimmed, with their
+// today token totals — so a Haiku→Opus switch shows both, not just Opus.
+function _sessionModelLabel(sess, activeColor) {
+  const active = sess.model || "";
+  const models = Array.isArray(sess.models) ? sess.models : [];
+  const activeLine = `<div style="font-size:11px;color:#9b9ba0;margin-top:2px;">${_shortModel(active)}</div>`;
+  if (models.length <= 1) return activeLine;
+
+  const others = models
+    .filter((m) => m.model !== active)
+    .map((m) =>
+      `<div style="font-size:10px;color:#c0c0c5;margin-top:1px;font-variant-numeric:tabular-nums;" title="${m.model}">${_shortModel(m.model)} · ${fmtTok(m.total)}</div>`,
+    )
+    .join("");
+  return `<div style="font-size:11px;color:${activeColor};font-weight:600;margin-top:2px;" title="${active}">${_shortModel(active)}</div>${others}`;
 }
 
 function _shortCwd(cwd) {

@@ -3,7 +3,7 @@
   "displayName": "Tokenscope",
   "description": "Realtime token & cost monitor for Claude Code and OpenAI Codex — native VS Code panel.",
   "version": "0.1.0",
-  "publisher": "your-publisher-id",
+  "publisher": "local",
   "license": "MIT",
   "icon": "media/icon.png",
   "engines": {
