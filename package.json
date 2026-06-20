@@ -1,0 +1,117 @@
+{
+  "name": "tokenscope",
+  "displayName": "Tokenscope",
+  "description": "Realtime token & cost monitor for Claude Code and OpenAI Codex — native VS Code panel.",
+  "version": "0.1.0",
+  "publisher": "your-publisher-id",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "codex",
+    "tokens",
+    "cost",
+    "usage"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/muilb/token-scope.git"
+  },
+  "bugs": {
+    "url": "https://github.com/muilb/token-scope/issues"
+  },
+  "galleryBanner": {
+    "color": "#2563eb",
+    "theme": "dark"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tokenscope",
+          "title": "Tokenscope",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "tokenscope": [
+        {
+          "type": "webview",
+          "id": "tokenscope.view",
+          "name": "Tokenscope"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "tokenscope.openPanel",
+        "title": "Tokenscope: Open Full Dashboard"
+      },
+      {
+        "command": "tokenscope.refresh",
+        "title": "Tokenscope: Refresh"
+      }
+    ],
+    "configuration": {
+      "title": "Tokenscope",
+      "properties": {
+        "tokenscope.statusBar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show today's cost in the status bar."
+        },
+        "tokenscope.historyDaysBack": {
+          "type": "number",
+          "default": 90,
+          "description": "How many days back to scan JSONL for historical cost."
+        },
+        "tokenscope.alert.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when a session's context window is nearly full (toast + status bar color)."
+        },
+        "tokenscope.alert.thresholdPct": {
+          "type": "number",
+          "default": 80,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Context-window usage percentage that triggers the warning."
+        },
+        "tokenscope.contextWindowOverride": {
+          "type": "number",
+          "default": 0,
+          "description": "Override the per-session context window size (tokens) for Claude sessions. 0 = auto-detect from model (opus/sonnet/fable = 1M, haiku = 200K). Set e.g. 200000 if your Claude Code runs a 200K window."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "node esbuild.js --production && vsce package --allow-missing-repository -o tokenscope.vsix",
+    "vscode:prepublish": "node esbuild.js --production"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0"
+  }
+}

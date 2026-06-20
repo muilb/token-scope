@@ -1,0 +1,304 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="%CSP%">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tokenscope</title>
+<style>
+  html,body{margin:0;padding:0;}
+  *{box-sizing:border-box;}
+  body{background:#f5f5f7;color:#1d1d1f;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Helvetica Neue',Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(21,160,106,.5)}70%{box-shadow:0 0 0 6px rgba(21,160,106,0)}100%{box-shadow:0 0 0 0 rgba(21,160,106,0)}}
+  button{cursor:pointer;font-family:inherit;}
+  .lang-btn{border:none;background:transparent;color:#6e6e73;padding:5px 10px;font-size:12px;font-weight:500;border-radius:6px;transition:background .15s;}
+  .lang-btn.active{background:#fff;color:#1d1d1f;box-shadow:0 1px 2px rgba(0,0,0,.13);}
+  .lang-btn:hover:not(.active){background:rgba(0,0,0,.04);}
+
+  /* Layout grids — fluid columns via auto-fit so they track the real container
+     width (works reliably inside the VS Code webview iframe, unlike viewport
+     media queries which can lag on resize). */
+  .grid-kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-bottom:8px;}
+  .grid-split{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:8px;margin-bottom:8px;}
+
+  .page-pad{padding:8px;}
+  .head-pad{flex-wrap:wrap;gap:12px;}
+  .head-right{flex-wrap:wrap;gap:12px;}
+  .table-scroll{overflow-x:auto;}
+</style>
+</head>
+<body>
+<div style="min-height:100%;background:#f5f5f7;padding-bottom:8px;">
+
+  <!-- ===================== HEADER ===================== -->
+  <div style="position:sticky;top:0;z-index:30;background:rgba(245,245,247,.78);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid rgba(0,0,0,.07);">
+    <div class="head-pad" style="max-width:1400px;margin:0 auto;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="width:30px;height:30px;border-radius:9px;background:linear-gradient(160deg,#5b9bff,#2563eb);display:flex;align-items:center;justify-content:center;box-shadow:0 4px 11px -3px rgba(37,99,235,.55);">
+          <div style="width:11px;height:11px;border-radius:3.5px;background:#fff;"></div>
+        </div>
+        <div style="display:flex;flex-direction:column;line-height:1.15;">
+          <span style="font-size:15px;font-weight:600;letter-spacing:-.02em;color:#1d1d1f;">Tokenscope</span>
+          <span style="font-size:11px;color:#86868b;letter-spacing:-.01em;" data-i18n="subtitle">Realtime token monitor</span>
+        </div>
+      </div>
+      <div class="head-right" style="display:flex;align-items:center;gap:16px;">
+        <!-- Language switcher -->
+        <div style="display:flex;background:#e7e7ec;border-radius:8px;padding:2px;gap:1px;">
+          <button class="lang-btn active" data-lang="en">EN</button>
+          <button class="lang-btn" data-lang="vi">VI</button>
+          <button class="lang-btn" data-lang="ja">JA</button>
+        </div>
+        <!-- Live indicator -->
+        <div id="live-indicator" style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#15a06a;font-weight:600;">
+          <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#15a06a;animation:pulse 2s ease-out infinite;"></span>
+          <span data-i18n="live">Live</span>
+        </div>
+        <span id="last-updated" style="font-size:12px;color:#9b9ba0;"></span>
+        <!-- Time filter -->
+        <div style="display:none;background:#e7e7ec;border-radius:9px;padding:2px;">
+          <button id="tf-1h" style="border:none;background:transparent;color:#6e6e73;padding:5px 13px;font-size:12.5px;font-weight:500;cursor:pointer;border-radius:7px;font-family:inherit;" data-tf="1h">1H</button>
+          <button id="tf-24h" style="border:none;background:#fff;color:#1d1d1f;padding:5px 13px;font-size:12.5px;font-weight:600;cursor:pointer;border-radius:7px;box-shadow:0 1px 2px rgba(0,0,0,.13);font-family:inherit;" data-tf="24h">24H</button>
+          <button id="tf-7d" style="border:none;background:transparent;color:#6e6e73;padding:5px 13px;font-size:12.5px;font-weight:500;cursor:pointer;border-radius:7px;font-family:inherit;" data-tf="7d">7D</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-pad" style="max-width:1400px;margin:0 auto;">
+
+    <!-- ===================== KPI ROW ===================== -->
+    <div class="grid-kpi">
+
+      <!-- KPI 1: tokens/min -->
+      <div style="background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:14px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.03),0 14px 30px -22px rgba(20,20,40,.22);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span style="font-size:12.5px;font-weight:600;color:#6e6e73;letter-spacing:-.01em;" data-i18n="tokensPerMin">Tokens / min</span>
+          <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:#15a06a;"><span style="width:6px;height:6px;border-radius:50%;background:#15a06a;animation:pulse 2s ease-out infinite;"></span><span data-i18n="live2">live</span></span>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:7px;">
+          <span id="kpi-tpm" class="kpi-num" style="font-size:33px;font-weight:600;letter-spacing:-.025em;color:#1d1d1f;font-variant-numeric:tabular-nums;">â€”</span>
+          <span style="font-size:12px;color:#9b9ba0;">tok/min</span>
+        </div>
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-top:8px;">
+          <svg id="sp-tpm" viewBox="0 0 120 34" preserveAspectRatio="none" style="width:62%;height:20px;overflow:visible;">
+            <path id="sp-tpm-area" fill="#2563eb" fill-opacity=".10"></path>
+            <polyline id="sp-tpm-line" fill="none" stroke="#2563eb" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"></polyline>
+          </svg>
+          <span id="kpi-tpm-delta" style="font-size:12px;font-weight:600;color:#9b9ba0;white-space:nowrap;"></span>
+        </div>
+      </div>
+
+      <!-- KPI 2: tokens today -->
+      <div style="background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:14px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.03),0 14px 30px -22px rgba(20,20,40,.22);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span style="font-size:12.5px;font-weight:600;color:#6e6e73;letter-spacing:-.01em;" data-i18n="tokensToday">Tokens today</span>
+          <span style="font-size:11px;color:#9b9ba0;" data-i18n="since0000">since 00:00</span>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:7px;">
+          <span id="kpi-tokens" class="kpi-num" style="font-size:33px;font-weight:600;letter-spacing:-.025em;color:#1d1d1f;font-variant-numeric:tabular-nums;">â€”</span>
+          <span style="font-size:12px;color:#9b9ba0;" data-i18n="tokens">tokens</span>
+        </div>
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-top:8px;">
+          <svg viewBox="0 0 120 34" preserveAspectRatio="none" style="width:62%;height:20px;overflow:visible;">
+            <path id="sp-tok-area" fill="#15a06a" fill-opacity=".10"></path>
+            <polyline id="sp-tok-line" fill="none" stroke="#15a06a" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"></polyline>
+          </svg>
+          <span id="kpi-tokens-delta" style="font-size:12px;font-weight:600;color:#9b9ba0;white-space:nowrap;"></span>
+        </div>
+      </div>
+
+      <!-- KPI 3: cost -->
+      <div style="background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:14px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.03),0 14px 30px -22px rgba(20,20,40,.22);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span style="font-size:12.5px;font-weight:600;color:#6e6e73;letter-spacing:-.01em;" data-i18n="estCostToday">Est. cost today</span>
+          <span id="kpi-cost-monthly" style="font-size:11px;color:#9b9ba0;"></span>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:7px;">
+          <span id="kpi-cost" class="kpi-num" style="font-size:33px;font-weight:600;letter-spacing:-.025em;color:#1d1d1f;font-variant-numeric:tabular-nums;">$â€”</span>
+        </div>
+        <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-top:8px;">
+          <svg viewBox="0 0 120 34" preserveAspectRatio="none" style="width:62%;height:20px;overflow:visible;">
+            <path id="sp-cost-area" fill="#6e6e73" fill-opacity=".10"></path>
+            <polyline id="sp-cost-line" fill="none" stroke="#1d1d1f" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"></polyline>
+          </svg>
+        </div>
+      </div>
+
+      <!-- KPI 4: sessions -->
+      <div style="background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:14px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.03),0 14px 30px -22px rgba(20,20,40,.22);">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <span style="font-size:12.5px;font-weight:600;color:#6e6e73;letter-spacing:-.01em;" data-i18n="activeSessions">Active sessions</span>
+          <span id="kpi-ctx-avg" style="font-size:11px;color:#9b9ba0;"></span>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:9px;">
+          <span id="kpi-sessions" class="kpi-num" style="font-size:33px;font-weight:600;letter-spacing:-.025em;color:#1d1d1f;font-variant-numeric:tabular-nums;">0</span>
+          <span style="font-size:12px;color:#9b9ba0;" data-i18n="running">running</span>
+        </div>
+        <div id="session-badges" style="display:flex;align-items:center;gap:8px;margin-top:18px;flex-wrap:wrap;"></div>
+      </div>
+
+    </div>
+
+    <!-- ===================== ACTIVE SESSIONS ===================== -->
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:14px;padding:12px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.03),0 14px 30px -22px rgba(20,20,40,.22);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <div>
+          <div style="font-size:15px;font-weight:600;letter-spacing:-.015em;color:#1d1d1f;" data-i18n="activeSessions">Active sessions</div>
+          <div style="font-size:12.5px;color:#9b9ba0;margin-top:2px;" data-i18n="sessionSubtitle">context window usage Â· live</div>
+        </div>
+        <span id="session-count-badge" style="font-size:12px;font-weight:600;color:#0d7a52;background:#eafaf2;padding:4px 10px;border-radius:7px;"></span>
+      </div>
+      <div id="session-list" style="min-height:60px;">
+        <div style="color:#9b9ba0;font-size:13px;padding:20px 0;" data-i18n="noActiveSessions">No active sessions</div>
+      </div>
+    </div>
+
+    <!-- ===================== RECENT SESSIONS TABLE ===================== -->
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:14px;padding:12px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.03),0 14px 30px -22px rgba(20,20,40,.22);">
+      <div style="font-size:15px;font-weight:600;letter-spacing:-.015em;color:#1d1d1f;margin-bottom:4px;" data-i18n="recentSessions">Recent sessions</div>
+      <div style="font-size:12.5px;color:#9b9ba0;margin-bottom:10px;" data-i18n="recentSubtitle">today's sessions</div>
+
+      <div class="table-scroll">
+       <div style="min-width:640px;">
+        <div id="sessions-table-header" style="display:grid;grid-template-columns:54px 70px 1fr 96px 56px 56px 48px 48px 56px 64px;gap:6px;padding:0 2px 8px;border-bottom:1px solid #eee;font-size:10.5px;font-weight:600;color:#9b9ba0;text-transform:uppercase;letter-spacing:.03em;">
+          <span>Tool</span>
+          <span>Session</span>
+          <span>Model / Project</span>
+          <span>Context</span>
+          <span style="text-align:right;">Input</span>
+          <span style="text-align:right;">Output</span>
+          <span style="text-align:right;color:#14b8a6;">CR</span>
+          <span style="text-align:right;color:#94a3b8;">CW</span>
+          <span style="text-align:right;">tok/min</span>
+          <span style="text-align:right;">Cost</span>
+        </div>
+        <div id="sessions-table-body"></div>
+       </div>
+      </div>
+    </div>
+
+    <!-- ===================== TOOL COMPARISON ===================== -->
+    <div style="margin-bottom:8px;">
+
+      <!-- Tool comparison -->
+      <div style="background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:14px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.03),0 14px 30px -22px rgba(20,20,40,.22);">
+        <div style="font-size:15px;font-weight:600;letter-spacing:-.015em;color:#1d1d1f;" data-i18n="toolComparison">Tool comparison</div>
+        <div style="font-size:12.5px;color:#9b9ba0;margin-top:2px;" data-i18n="tokenShareToday">token share Â· today</div>
+
+        <div style="display:flex;height:10px;border-radius:99px;overflow:hidden;margin:16px 0 9px;">
+          <div id="cmp-claude-bar" style="background:#2563eb;transition:width .4s;"></div>
+          <div id="cmp-codex-bar" style="background:#7c3aed;transition:width .4s;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:11.5px;">
+          <span id="cmp-claude-pct" style="color:#2563eb;font-weight:600;"></span>
+          <span id="cmp-codex-pct" style="color:#7c3aed;font-weight:600;"></span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:11px;margin-top:18px;">
+          <div style="border:1px solid #eee;border-radius:14px;padding:14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span style="display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:#1d1d1f;"><span style="width:9px;height:9px;border-radius:3px;background:#2563eb;"></span>Claude Code</span>
+              <span id="cmp-claude-tokens" style="font-size:17px;font-weight:600;color:#1d1d1f;font-variant-numeric:tabular-nums;letter-spacing:-.02em;">â€”</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:13px;">
+              <div><div style="font-size:11px;color:#9b9ba0;" data-i18n="cost">Cost</div><div id="cmp-claude-cost" style="font-size:13px;font-weight:600;color:#1d1d1f;font-variant-numeric:tabular-nums;margin-top:2px;">$â€”</div></div>
+              <div><div style="font-size:11px;color:#9b9ba0;" data-i18n="requests">Requests</div><div id="cmp-claude-req" style="font-size:13px;font-weight:600;color:#1d1d1f;font-variant-numeric:tabular-nums;margin-top:2px;">â€”</div></div>
+              <div><div style="font-size:11px;color:#9b9ba0;" data-i18n="cacheHit">Cache hit</div><div id="cmp-claude-cache" style="font-size:13px;font-weight:600;color:#1d1d1f;font-variant-numeric:tabular-nums;margin-top:2px;">â€”</div></div>
+            </div>
+          </div>
+          <div style="border:1px solid #eee;border-radius:14px;padding:14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span style="display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:#1d1d1f;"><span style="width:9px;height:9px;border-radius:3px;background:#7c3aed;"></span>Codex</span>
+              <span id="cmp-codex-tokens" style="font-size:17px;font-weight:600;color:#1d1d1f;font-variant-numeric:tabular-nums;letter-spacing:-.02em;">â€”</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:13px;">
+              <div><div style="font-size:11px;color:#9b9ba0;" data-i18n="liveEst">Live est.</div><div id="cmp-codex-cost" style="font-size:13px;font-weight:600;color:#1d1d1f;font-variant-numeric:tabular-nums;margin-top:2px;">â€”</div></div>
+              <div><div style="font-size:11px;color:#9b9ba0;" data-i18n="requests">Requests</div><div id="cmp-codex-req" style="font-size:13px;font-weight:600;color:#1d1d1f;font-variant-numeric:tabular-nums;margin-top:2px;">â€”</div></div>
+              <div><div style="font-size:11px;color:#9b9ba0;" data-i18n="cacheHit">Cache hit</div><div id="cmp-codex-cache" style="font-size:13px;font-weight:600;color:#1d1d1f;font-variant-numeric:tabular-nums;margin-top:2px;">â€”</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===================== COMPOSITION ===================== -->
+    <div style="margin-bottom:12px;">
+
+      <!-- Token composition donuts (per tool) -->
+      <div style="background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:14px;padding:12px;box-shadow:0 1px 2px rgba(0,0,0,.03),0 14px 30px -22px rgba(20,20,40,.22);">
+        <div style="font-size:15px;font-weight:600;letter-spacing:-.015em;color:#1d1d1f;" data-i18n="tokenComposition">Token composition</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;margin-top:14px;">
+          <div style="border:1px solid #f0f0f3;border-radius:14px;padding:12px;">
+            <div style="font-size:12.5px;font-weight:600;color:#1d1d1f;">Claude Code</div>
+            <div id="donut-claude-subtitle" style="font-size:11.5px;color:#9b9ba0;margin-top:2px;"></div>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:10px;">
+              <div style="position:relative;flex:0 0 auto;">
+                <svg viewBox="0 0 140 140" style="width:112px;height:112px;display:block;">
+                  <circle cx="70" cy="70" r="58" fill="none" stroke="#f0f0f3" stroke-width="17"></circle>
+                  <g id="donut-claude-segs" transform="rotate(-90 70 70)"></g>
+                </svg>
+                <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+                  <span id="donut-claude-center-pct" style="font-size:20px;font-weight:600;letter-spacing:-.02em;color:#1d1d1f;font-variant-numeric:tabular-nums;">—</span>
+                  <span style="font-size:10px;color:#9b9ba0;margin-top:1px;" data-i18n="cacheHit2">cache hit</span>
+                </div>
+              </div>
+              <div id="donut-claude-legend" style="flex:1;display:flex;flex-direction:column;gap:8px;"></div>
+            </div>
+          </div>
+          <div style="border:1px solid #f0f0f3;border-radius:14px;padding:12px;">
+            <div style="font-size:12.5px;font-weight:600;color:#1d1d1f;">Codex</div>
+            <div id="donut-codex-subtitle" style="font-size:11.5px;color:#9b9ba0;margin-top:2px;"></div>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:10px;">
+              <div style="position:relative;flex:0 0 auto;">
+                <svg viewBox="0 0 140 140" style="width:112px;height:112px;display:block;">
+                  <circle cx="70" cy="70" r="58" fill="none" stroke="#f0f0f3" stroke-width="17"></circle>
+                  <g id="donut-codex-segs" transform="rotate(-90 70 70)"></g>
+                </svg>
+                <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;">
+                  <span id="donut-codex-center-pct" style="font-size:20px;font-weight:600;letter-spacing:-.02em;color:#1d1d1f;font-variant-numeric:tabular-nums;">—</span>
+                  <span style="font-size:10px;color:#9b9ba0;margin-top:1px;" data-i18n="cacheHit2">cache hit</span>
+                </div>
+              </div>
+              <div id="donut-codex-legend" style="flex:1;display:flex;flex-direction:column;gap:8px;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ===================== HISTORICAL ===================== -->
+    <div style="background:#fff;border:1px solid rgba(0,0,0,.07);border-radius:14px;padding:12px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.03),0 14px 30px -22px rgba(20,20,40,.22);">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:8px;">
+        <div>
+          <div style="font-size:15px;font-weight:600;letter-spacing:-.015em;color:#1d1d1f;" data-i18n="dailyUsage">Daily usage</div>
+          <div style="font-size:12.5px;color:#9b9ba0;margin-top:2px;" data-i18n="dailySubtitle">last 14 days Â· stacked by tool</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:18px;">
+          <div style="display:flex;gap:14px;">
+            <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#6e6e73;"><span style="width:9px;height:9px;border-radius:3px;background:#2563eb;"></span>Claude Code</span>
+            <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#6e6e73;"><span style="width:9px;height:9px;border-radius:3px;background:#7c3aed;"></span>Codex</span>
+          </div>
+          <div style="text-align:right;border-left:1px solid #eee;padding-left:18px;">
+            <div id="hist-total-tokens" style="font-size:16px;font-weight:600;color:#1d1d1f;font-variant-numeric:tabular-nums;letter-spacing:-.02em;">â€”</div>
+            <div id="hist-total-cost" style="font-size:11.5px;color:#9b9ba0;"></div>
+          </div>
+        </div>
+      </div>
+      <svg id="hist-chart" viewBox="0 0 1340 228" style="width:100%;height:auto;display:block;">
+        <line x1="6" y1="14" x2="1334" y2="14" stroke="#f3f3f6" stroke-width="1"></line>
+        <line x1="6" y1="106" x2="1334" y2="106" stroke="#f3f3f6" stroke-width="1"></line>
+        <line x1="6" y1="198" x2="1334" y2="198" stroke="#e6e6ea" stroke-width="1"></line>
+        <g id="hist-bars"></g>
+      </svg>
+      <div id="hist-dates" style="display:flex;justify-content:space-between;font-size:10.5px;color:#b0b0b5;font-family:ui-monospace,Menlo,monospace;padding:0 4px;margin-top:4px;"></div>
+    </div>
+
+  </div>
+</div>
+
+<script nonce="%NONCE%" src="%APP_JS%"></script>
+</body>
+</html>
