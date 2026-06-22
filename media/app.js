@@ -1,4 +1,4 @@
-﻿// Tokenscope â€” frontend logic
+﻿// CodeTokens Monitor - frontend logic
 // WebSocket client + SVG chart rendering + i18n (EN / VI / JA)
 
 // ---------------------------------------------------------------------------
