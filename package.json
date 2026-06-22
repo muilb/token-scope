@@ -1,7 +1,7 @@
 {
-  "name": "tokenscope",
-  "displayName": "Tokenscope",
-  "description": "Realtime token & cost monitor for AI coding assistants — native VS Code panel.",
+  "name": "codetokens-monitor",
+  "displayName": "CodeTokens Monitor",
+  "description": "Live token usage and cost dashboard for AI coding assistants, shown natively in a VS Code panel.",
   "version": "0.1.0",
   "publisher": "mocviendotcom",
   "license": "MIT",
@@ -41,7 +41,7 @@
       "activitybar": [
         {
           "id": "tokenscope",
-          "title": "Tokenscope",
+          "title": "CodeTokens Monitor",
           "icon": "media/icon.svg"
         }
       ]
@@ -51,22 +51,22 @@
         {
           "type": "webview",
           "id": "tokenscope.view",
-          "name": "Tokenscope"
+          "name": "CodeTokens Monitor"
         }
       ]
     },
     "commands": [
       {
         "command": "tokenscope.openPanel",
-        "title": "Tokenscope: Open Full Dashboard"
+        "title": "CodeTokens Monitor: Open Full Dashboard"
       },
       {
         "command": "tokenscope.refresh",
-        "title": "Tokenscope: Refresh"
+        "title": "CodeTokens Monitor: Refresh"
       }
     ],
     "configuration": {
-      "title": "Tokenscope",
+      "title": "CodeTokens Monitor",
       "properties": {
         "tokenscope.statusBar.enabled": {
           "type": "boolean",
@@ -111,7 +111,5 @@
     "esbuild": "^0.24.0",
     "typescript": "^5.5.0"
   },
-  "dependencies": {
-    "chokidar": "^3.6.0"
-  }
+  "dependencies": {}
 }

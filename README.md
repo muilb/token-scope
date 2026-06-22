@@ -1,8 +1,8 @@
-# Tokenscope
+# CodeTokens Monitor
 
 Realtime token & cost monitor for AI coding assistants, native to VS Code.
 
-Tokenscope reads your local session logs and shows live token usage, estimated
+CodeTokens Monitor reads your local session logs and shows live token usage, estimated
 cost, active sessions, and context-window pressure — right in the editor. No
 Python, no web server, no browser, no API key.
 
@@ -29,7 +29,7 @@ data — there is nothing to configure.
 
 ## Usage
 
-Open the **Tokenscope** icon in the Activity Bar for the sidebar dashboard, or
+Open the **CodeTokens Monitor** icon in the Activity Bar for the sidebar dashboard, or
 click the cost in the status bar to open the full panel in an editor column.
 
 ## Settings
@@ -44,7 +44,7 @@ click the cost in the status bar to open the full panel in an editor column.
 
 ## Notes on context-window detection
 
-Session logs don't always record the context-window size, so Tokenscope infers
+Session logs don't always record the context-window size, so CodeTokens Monitor infers
 it from the model and from usage: a session already holding more than 200K
 tokens is treated as the 1M window. The percentage is an out-of-band estimate
 and may differ from the assistant's own counter by a few percent — the absolute
@@ -52,7 +52,7 @@ token count is the reliable figure.
 
 ## Privacy
 
-Everything runs locally. Tokenscope reads session files on your machine and
+Everything runs locally. CodeTokens Monitor reads session files on your machine and
 sends nothing anywhere.
 
 ## License

@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import chokidar, { FSWatcher } from "chokidar";
+import * as fs from "fs";
 import { CLAUDE_HOME, CODEX_HOME } from "./pricing";
 import {
   buildFullState,
@@ -13,7 +13,7 @@ import {
 } from "./aggregator";
 
 let statusBarItem: vscode.StatusBarItem | undefined;
-let watcher: FSWatcher | undefined;
+let watchers: fs.FSWatcher[] = [];
 let pollTimer: NodeJS.Timeout | undefined;
 let debounceTimer: NodeJS.Timeout | undefined;
 
@@ -170,14 +170,17 @@ function startWatcher(): void {
   if (fsLib.existsSync(codexSessions)) paths.push(codexSessions);
   if (!paths.length) return;
 
-  watcher = chokidar.watch(paths, {
-    ignoreInitial: true,
-    persistent: true,
-    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    depth: 6,
-  });
-  watcher.on("add", (p) => scheduleFileUpdate(p));
-  watcher.on("change", (p) => scheduleFileUpdate(p));
+  for (const root of paths) {
+    try {
+      const w = fsLib.watch(root, { recursive: true, persistent: true }, (_event, filename) => {
+        if (!filename) return;
+        scheduleFileUpdate(path.join(root, filename.toString()));
+      });
+      watchers.push(w);
+    } catch {
+      // Recursive watch can be unsupported on some platforms; polling still covers updates.
+    }
+  }
 }
 
 let disposed = false;
@@ -267,5 +270,6 @@ export function deactivate(): void {
   disposed = true;
   if (pollTimer) clearInterval(pollTimer);
   if (debounceTimer) clearTimeout(debounceTimer);
-  if (watcher) watcher.close();
+  for (const w of watchers) w.close();
+  watchers = [];
 }
