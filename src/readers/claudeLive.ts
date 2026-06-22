@@ -28,6 +28,11 @@ export interface SessionRead {
   tok_per_min: number;
 }
 
+export interface SessionModelUsage {
+  model: string;
+  total: number;
+}
+
 export interface ActiveSession {
   session_id: string;
   project_slug: string;
@@ -41,6 +46,9 @@ export interface ActiveSession {
   output: number;
   cache_read: number;
   cache_create: number;
+  // Per-model token totals for this session, today only. More than one entry
+  // means the user switched models mid-session (e.g. /model). Sorted desc by total.
+  models: SessionModelUsage[];
 }
 
 export interface ScanTodayResult {
@@ -94,10 +102,8 @@ function readSessionFile(
   const models: Record<string, Usage> = {};
   let cwd = "";
   let lastSeen = "";
+  let lastModel = "";
   let ctxTokens = 0;
-  let dominantModel = "";
-  let dominantCount = 0;
-  const modelCounts: Record<string, number> = {};
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -141,12 +147,7 @@ function readSessionFile(
       (usage.cache_creation_input_tokens ?? 0) +
       (usage.output_tokens ?? 0);
     lastSeen = ts;
-
-    modelCounts[model] = (modelCounts[model] ?? 0) + 1;
-    if (modelCounts[model] > dominantCount) {
-      dominantModel = model;
-      dominantCount = modelCounts[model];
-    }
+    lastModel = model;
   }
 
   _fileState.set(filePath, { offset: newOffset, seen: seenUuids });
@@ -166,7 +167,7 @@ function readSessionFile(
     cwd,
     last_seen: lastSeen,
     ctx_tokens: ctxTokens,
-    dominant_model: dominantModel,
+    dominant_model: lastModel,
     tok_per_min: tokPerMin,
   };
 }
@@ -241,6 +242,12 @@ export function scanToday(claudeHome: string): ScanTodayResult {
       if (result.last_seen && tsAge(result.last_seen) < 1800) {
         const agg = zeroUsage();
         for (const usage of Object.values(result.models)) addUsage(agg, usage);
+        const perModel: SessionModelUsage[] = Object.entries(result.models)
+          .map(([model, u]) => ({
+            model,
+            total: u.input + u.output + u.cache_read + u.cache_create,
+          }))
+          .sort((a, b) => b.total - a.total);
         const age = tsAge(result.last_seen);
         const status = age < 300 ? "active" : "idle";
         activeSessions.push({
@@ -256,6 +263,7 @@ export function scanToday(claudeHome: string): ScanTodayResult {
           output: agg.output,
           cache_read: agg.cache_read,
           cache_create: agg.cache_create,
+          models: perModel,
         });
       }
     }

@@ -1,9 +1,9 @@
 {
   "name": "tokenscope",
   "displayName": "Tokenscope",
-  "description": "Realtime token & cost monitor for Claude Code and OpenAI Codex — native VS Code panel.",
+  "description": "Realtime token & cost monitor for AI coding assistants — native VS Code panel.",
   "version": "0.1.0",
-  "publisher": "your-publisher-id",
+  "publisher": "mocviendotcom",
   "license": "MIT",
   "icon": "media/icon.png",
   "engines": {
@@ -14,12 +14,12 @@
     "Other"
   ],
   "keywords": [
-    "claude",
-    "claude code",
-    "codex",
     "tokens",
     "cost",
-    "usage"
+    "usage",
+    "monitor",
+    "llm",
+    "ai"
   ],
   "repository": {
     "type": "git",
