@@ -3,7 +3,7 @@
   "displayName": "CodeTokens Monitor",
   "description": "Live token usage and cost dashboard for AI coding assistants, shown natively in a VS Code panel.",
   "version": "0.1.0",
-  "publisher": "mocviendotcom",
+  "publisher": "toomo",
   "license": "MIT",
   "icon": "media/icon.png",
   "engines": {
