@@ -172,7 +172,7 @@ function readSessionFile(
   };
 }
 
-function slugToCwd(slug: string): string {
+export function slugToCwd(slug: string): string {
   if (!slug) return slug;
   const parts = slug.split(/--(.*)/s);
   if (parts.length >= 2 && parts[0].length === 1) {

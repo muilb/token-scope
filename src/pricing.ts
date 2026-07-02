@@ -15,6 +15,7 @@ export const CODEX_HOME = path.join(HOME, ".codex");
 type PricingTuple = [number, number, number, number];
 
 const PRICING: Record<string, PricingTuple> = {
+  "claude-sonnet-5": [3.0, 15.0, 0.1, 1.25],
   "claude-sonnet-4-6": [3.0, 15.0, 0.1, 1.25],
   "claude-sonnet-4-5": [3.0, 15.0, 0.1, 1.25],
   "claude-haiku-4-5": [1.0, 5.0, 0.1, 1.25],
@@ -35,16 +36,41 @@ const PRICING: Record<string, PricingTuple> = {
   o4: [0.0, 0.0, 0.0, 0.0],
 };
 
+// ---------------------------------------------------------------------------
+// Pricing override (synced from the central server, see src/central/pricingSync.ts).
+// When set, it takes precedence over the built-in PRICING table so the local
+// dashboard matches the central server's admin-managed prices. Cleared/absent
+// (offline or central disabled) → we fall back to the built-in table above.
+// ---------------------------------------------------------------------------
+let PRICING_OVERRIDE: Record<string, PricingTuple> | null = null;
+
+/** Replace the active pricing table with a synced one, or pass null to clear. */
+export function setPricingOverride(map: Record<string, PricingTuple> | null): void {
+  PRICING_OVERRIDE = map && Object.keys(map).length ? map : null;
+}
+
+/** The pricing table currently in effect (override if synced, else built-in). */
+function activePricing(): Record<string, PricingTuple> {
+  return PRICING_OVERRIDE ?? PRICING;
+}
+
+/** A copy of the effective pricing table — sent to the webview so its per-session
+ *  cost matches the extension (and any prices synced from the central server). */
+export function pricingSnapshot(): Record<string, PricingTuple> {
+  return { ...activePricing() };
+}
+
 /** Return pricing tuple for model, matching by prefix (longest match wins). */
 export function getPricing(model: string): PricingTuple {
   const modelLower = (model || "").toLowerCase();
+  const table = activePricing();
   let bestKey = "";
-  for (const key of Object.keys(PRICING)) {
+  for (const key of Object.keys(table)) {
     if (modelLower.startsWith(key) && key.length > bestKey.length) {
       bestKey = key;
     }
   }
-  return PRICING[bestKey] ?? [0.0, 0.0, 0.0, 0.0];
+  return table[bestKey] ?? [0.0, 0.0, 0.0, 0.0];
 }
 
 // ---------------------------------------------------------------------------

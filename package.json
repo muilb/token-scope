@@ -2,7 +2,7 @@
   "name": "codetokens-monitor",
   "displayName": "CodeTokens Monitor",
   "description": "Live token usage and cost dashboard for AI coding assistants, shown natively in a VS Code panel.",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "publisher": "toomo",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -63,6 +63,14 @@
       {
         "command": "tokenscope.refresh",
         "title": "CodeTokens Monitor: Refresh"
+      },
+      {
+        "command": "tokenscope.central.pushNow",
+        "title": "CodeTokens Monitor: Push usage to central server now"
+      },
+      {
+        "command": "tokenscope.central.syncPricing",
+        "title": "CodeTokens Monitor: Sync pricing from central server"
       }
     ],
     "configuration": {
@@ -94,14 +102,46 @@
           "type": "number",
           "default": 0,
           "description": "Override the per-session context window size (tokens) for Claude sessions. 0 = auto-detect from model (opus/sonnet/fable = 1M, haiku = 200K). Set e.g. 200000 if your Claude Code runs a 200K window."
+        },
+        "tokenscope.central.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Push aggregated usage (apikey only) to a central internal server. Local dashboard is unaffected. See server/README.md."
+        },
+        "tokenscope.central.url": {
+          "type": "string",
+          "default": "",
+          "description": "Central server base URL, e.g. http://server-noi-bo:8787 . LAN/VPN only."
+        },
+        "tokenscope.central.ingestKey": {
+          "type": "string",
+          "default": "",
+          "description": "Shared internal token sent as X-Ingest-Key. NOT your Claude/OpenAI key."
+        },
+        "tokenscope.central.pushIntervalMin": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "description": "Fallback push interval (minutes) if file-watch misses an event. Auth is captured per-delta at read time."
+        },
+        "tokenscope.owner": {
+          "type": "string",
+          "default": "",
+          "description": "Optional override for the reported member identity. Empty = OS user + org."
+        },
+        "tokenscope.projectMap": {
+          "type": "object",
+          "default": {},
+          "description": "Map a repo path/slug OR key:<keyHash> to an enterprise project name. e.g. { \"d:/Work/Projects/BTA\": \"SunStory-BTA\", \"key:3f9a1c22\": \"ProjectX\" }"
         }
       }
     }
   },
   "scripts": {
     "compile": "node esbuild.js",
+    "test": "node test.js",
     "watch": "node esbuild.js --watch",
-    "package": "node esbuild.js --production && vsce package --allow-missing-repository -o tokenscope.vsix",
+    "package": "node esbuild.js --production && vsce package --allow-missing-repository -o codetokens-monitor-0.5.0.vsix",
     "vscode:prepublish": "node esbuild.js --production"
   },
   "devDependencies": {
