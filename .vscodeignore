@@ -7,3 +7,8 @@ tsconfig.json
 **/*.ts
 .gitignore
 README.dev.md
+server/**
+test.js
+**/*.test.*
+*.vsix
+improve/**

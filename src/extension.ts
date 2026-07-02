@@ -11,6 +11,9 @@ import {
   getState,
   DashboardState,
 } from "./aggregator";
+import { activateCentral, deactivateCentral } from "./central/wire";
+import { applyCachedPricing } from "./central/pricingSync";
+import { pricingSnapshot } from "./pricing";
 
 let statusBarItem: vscode.StatusBarItem | undefined;
 let watchers: fs.FSWatcher[] = [];
@@ -36,6 +39,9 @@ function applyContextOverride(): void {
 }
 
 function broadcast(state: DashboardState): void {
+  // Attach the effective pricing table so the webview's per-session cost uses the
+  // same prices as the extension (including any synced from the central server).
+  (state as any).pricing = pricingSnapshot();
   for (const w of sinks) {
     w.postMessage({ type: "update", data: state }).then(undefined, () => {});
   }
@@ -125,8 +131,8 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 
 function registerSink(webview: vscode.Webview): vscode.Disposable {
   sinks.add(webview);
-  // Push current state immediately.
-  webview.postMessage({ type: "update", data: getState() }).then(undefined, () => {});
+  // Push current state immediately (with the effective pricing table attached).
+  webview.postMessage({ type: "update", data: { ...getState(), pricing: pricingSnapshot() } }).then(undefined, () => {});
   const msgSub = webview.onDidReceiveMessage((msg) => {
     if (msg?.type === "refresh") {
       const state = buildFullState(daysBack());
@@ -188,12 +194,20 @@ let disposed = false;
 export function activate(context: vscode.ExtensionContext): void {
   disposed = false;
   applyContextOverride();
+  // Apply last-synced central prices (if any) before the first scan, so cost is
+  // consistent with central even offline. syncPricing() refreshes this later.
+  applyCachedPricing(context);
 
   // Re-apply settings live and refresh the view when the user edits them.
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration("tokenscope")) return;
       applyContextOverride();
+      // Re-wire the central pusher if its settings changed (enable/disable/url/interval).
+      if (e.affectsConfiguration("tokenscope.central")) {
+        deactivateCentral();
+        activateCentral(context);
+      }
       try {
         broadcast(refreshActiveSessions(daysBack()) ?? getState());
       } catch {
@@ -264,6 +278,9 @@ export function activate(context: vscode.ExtensionContext): void {
       console.error("Tokenscope poll failed", e);
     }
   }, 15000);
+
+  // Central usage pusher (07/08) — background, gated behind tokenscope.central.enabled.
+  activateCentral(context);
 }
 
 export function deactivate(): void {
@@ -272,4 +289,5 @@ export function deactivate(): void {
   if (debounceTimer) clearTimeout(debounceTimer);
   for (const w of watchers) w.close();
   watchers = [];
+  deactivateCentral();
 }

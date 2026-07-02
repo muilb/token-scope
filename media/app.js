@@ -172,8 +172,11 @@ document.querySelectorAll(".lang-btn").forEach((btn) => {
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
-// Client-side pricing mirror (input/M, output/M, cache_read ratio, cache_create ratio)
+// Client-side pricing mirror (input/M, output/M, cache_read ratio, cache_create ratio).
+// Fallback only — the extension sends the effective table (incl. prices synced from
+// the central server) via state.pricing, which _pricingOverride prefers when present.
 const _PRICING = {
+  "claude-sonnet-5":    [3.00, 15.00, 0.10, 1.25],
   "claude-sonnet-4-6":  [3.00, 15.00, 0.10, 1.25],
   "claude-sonnet-4-5":  [3.00, 15.00, 0.10, 1.25],
   "claude-haiku-4-5":   [1.00,  5.00, 0.10, 1.25],
@@ -189,10 +192,15 @@ const _PRICING = {
   "gpt-5.3":            [2.50, 15.00, 0.10, 0.00],
 };
 
+// Effective pricing pushed by the extension (built-in ⊕ synced central override).
+// Null until the first state update; then it takes precedence over _PRICING.
+let _pricingOverride = null;
+
 function _getPricing(model) {
   const m = (model || "").toLowerCase();
+  const table = (_pricingOverride && Object.keys(_pricingOverride).length) ? _pricingOverride : _PRICING;
   let bestKey = "", best = null;
-  for (const [k, v] of Object.entries(_PRICING)) {
+  for (const [k, v] of Object.entries(table)) {
     if (m.startsWith(k) && k.length > bestKey.length) { bestKey = k; best = v; }
   }
   return best || [0, 0, 0, 0];
@@ -1005,6 +1013,7 @@ function connectVscode() {
   window.addEventListener("message", (e) => {
     const msg = e.data;
     if (msg && msg.type === "update") {
+      if (msg.data && msg.data.pricing) _pricingOverride = msg.data.pricing;
       render(msg.data);
       startUpdateTimer();
     }
