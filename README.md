@@ -21,7 +21,9 @@ Python, no web server, no browser, no API key.
 - **Central usage (optional, off by default)** — push *aggregated* usage to an
   internal team server for a combined member × project dashboard. Only usage
   authenticated with an **API key** is pushed; personal OAuth / ChatGPT logins are
-  never sent. See [Central usage server](#central-usage-server-optional).
+  never sent. Cost is recomputed on the server from an **admin-managed pricing
+  table** and can be **synced back** to each machine so local costs match the team
+  dashboard. See [Central usage server](#central-usage-server-optional).
 
 ## Requirements
 
@@ -48,7 +50,7 @@ click the cost in the status bar to open the full panel in an editor column.
 | `tokenscope.central.enabled` | `false` | Push aggregated usage (API-key only) to a central server. Local dashboard is unaffected. |
 | `tokenscope.central.url` | `""` | Central server base URL (LAN/VPN only), e.g. `http://server:8787`. |
 | `tokenscope.central.ingestKey` | `""` | Shared internal token sent as `X-Ingest-Key`. **Not** your Claude/OpenAI key. |
-| `tokenscope.central.pushIntervalMin` | `15` | Fallback push interval (minutes). |
+| `tokenscope.central.pushIntervalMin` | `1` | Fallback push interval (minutes); also when local prices are synced from the server. |
 | `tokenscope.owner` | `""` | Override the reported member identity. Empty = OS user + org. |
 | `tokenscope.projectMap` | `{}` | Map a repo path/slug or `key:<hash>` to an enterprise project name. |
 
@@ -68,6 +70,17 @@ server is down, the local dashboard keeps working and the data is retried later.
 To run the server, see [`server/README.md`](server/README.md). Set
 `tokenscope.central.enabled`, `.url`, and `.ingestKey`, then usage starts flowing
 from the moment you enable it (there is no backfill of past sessions).
+
+### Pricing (centrally managed)
+
+The server recomputes cost from the raw token counts against a pricing table an
+admin edits on the server's `/admin` page (protected by a separate `ADMIN_KEY`) —
+so changing a price re-values both past and new usage at once, and a brand-new
+model can be priced without shipping a new build. The extension pulls that table
+and applies it locally, so per-session costs in the dashboard match the team
+server. It syncs automatically when Central usage is on; run **"CodeTokens
+Monitor: Sync pricing from central server"** to refresh on demand. When offline or
+before the first sync, a built-in price table is used as a fallback.
 
 ## Notes on context-window detection
 
