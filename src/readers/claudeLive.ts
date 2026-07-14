@@ -72,7 +72,7 @@ function readSessionFile(
   filePath: string,
   todayLocal: string,
   startOffset: number,
-  seenUuids: Set<string>,
+  seenKeys: Set<string>,
 ): SessionRead | null {
   let buf: Buffer;
   let fileSize: number;
@@ -80,7 +80,7 @@ function readSessionFile(
     fileSize = fs.statSync(filePath).size;
     if (startOffset >= fileSize) {
       // Nothing new; still register state so future calls are correct.
-      _fileState.set(filePath, { offset: fileSize, seen: seenUuids });
+      _fileState.set(filePath, { offset: fileSize, seen: seenKeys });
       return null;
     }
     const fd = fs.openSync(filePath, "r");
@@ -121,13 +121,18 @@ function readSessionFile(
     const ts: string = obj.timestamp ?? "";
     if (localDay(ts) !== todayLocal) continue;
 
-    const uuid: string = obj.uuid ?? "";
-    if (uuid && seenUuids.has(uuid)) continue;
-    if (uuid) seenUuids.add(uuid);
-
     const msg = obj.message ?? {};
     const usage = msg.usage;
     if (!usage) continue;
+
+    // Dedup by API response identity, not the JSONL line uuid. Claude Code
+    // writes one line per content block (thinking/text/tool_use) of a single
+    // response, stamping the SAME `usage` on each line — so keying on the line
+    // uuid counts a multi-block response's tokens multiple times. message.id +
+    // requestId identifies the one billed request (matches ccusage / billing).
+    const dedupKey = msg.id && obj.requestId ? `${msg.id}:${obj.requestId}` : "";
+    if (dedupKey && seenKeys.has(dedupKey)) continue;
+    if (dedupKey) seenKeys.add(dedupKey);
 
     let model: string = msg.model ?? obj.model ?? "unknown";
     if (!model) model = "unknown";
@@ -150,7 +155,7 @@ function readSessionFile(
     lastModel = model;
   }
 
-  _fileState.set(filePath, { offset: newOffset, seen: seenUuids });
+  _fileState.set(filePath, { offset: newOffset, seen: seenKeys });
 
   if (Object.keys(models).length === 0) return null;
 
@@ -346,14 +351,16 @@ export function scanHistoricalCosts(
         if (!ts) continue;
         const day = localDay(ts);
         if (!day || day < cutoffStr) continue;
-        const uuid: string = obj.uuid ?? "";
-        if (uuid) {
-          if (seen.has(uuid)) continue;
-          seen.add(uuid);
-        }
         const msg = obj.message ?? {};
         const usage = msg.usage;
         if (!usage) continue;
+        // Dedup by response identity (message.id + requestId), not the line
+        // uuid — a multi-block response repeats the same usage across lines.
+        const dedupKey = msg.id && obj.requestId ? `${msg.id}:${obj.requestId}` : "";
+        if (dedupKey) {
+          if (seen.has(dedupKey)) continue;
+          seen.add(dedupKey);
+        }
         const model: string = msg.model ?? obj.model ?? "unknown";
         const inp = usage.input_tokens ?? 0;
         const out = usage.output_tokens ?? 0;

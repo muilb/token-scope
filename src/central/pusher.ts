@@ -99,6 +99,7 @@ export function advanceCursor(store: CursorStore, d: Delta): void {
     lastSeq: d.seq,
     cumTokens: (prev?.cumTokens ?? 0) + tokens,
     lastAuthMtime: d._authMtime,
+    lastMsgKey: d._nextMsgKey ?? prev?.lastMsgKey,
   });
 }
 
