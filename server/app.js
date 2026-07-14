@@ -14,8 +14,9 @@
 const querystring = require("querystring");
 const Fastify = require("fastify");
 const { upsertDeltas } = require("./db");
-const { summary, breakdown, filterOptions } = require("./queries");
+const { summary, breakdown, sessionBreakdown, filterOptions } = require("./queries");
 const { renderDashboard } = require("./dashboard");
+const { renderSessions } = require("./sessions");
 const { renderAdmin, renderKeyPrompt } = require("./admin");
 const pricing = require("./pricing");
 
@@ -141,6 +142,49 @@ function buildApp(db, { ingestKey, adminKey } = {}) {
     const rows = breakdown(db, pricing.loadPricing(db), filter);
     const options = filterOptions(db);
     reply.type("text/html").send(renderDashboard(rows, { ...filter, options }));
+  });
+
+  // Per-session detail page — one row per session. Same default-to-today and
+  // filter behavior as GET /, so the list isn't unbounded on a fresh load.
+  app.get("/sessions", async (req, reply) => {
+    const q = req.query || {};
+    const { member, project, key, all } = q;
+    let { from, to } = q;
+    const untouched = !from && !to && !member && !project && !key;
+    if (untouched && !all) {
+      from = to = todayLocal();
+    }
+    const filter = { from, to, member, project, key };
+    const rows = sessionBreakdown(db, pricing.loadPricing(db), filter);
+    const options = filterOptions(db);
+    reply.type("text/html").send(renderSessions(rows, { ...filter, options }));
+  });
+
+  // Per-session CSV — one row per session. Like breakdown.csv, only the SHORT
+  // repo name is exported (never the full path).
+  app.get("/api/v1/sessions.csv", async (req, reply) => {
+    const { from, to, member, project, key } = req.query || {};
+    const rows = sessionBreakdown(db, pricing.loadPricing(db), { from, to, member, project, key }).map((r) => ({
+      session_id: r.session_id,
+      member: r.os_user,
+      hostname: r.hostname,
+      tool: r.tool,
+      project: r.project,
+      repo: r.repoShort,
+      auth: r.auth_type,
+      key_hash: r.key_hash || "",
+      first_ts: r.first_ts || r.first_date || "",
+      last_ts: r.last_ts || r.last_date || "",
+      deltas: r.deltas,
+      input: r.input,
+      output: r.output,
+      cache_read: r.cache_read,
+      cache_write: r.cache_write,
+      tokens: r.tokens,
+      cost: r.cost,
+    }));
+    reply.type("text/csv").header("content-disposition", 'attachment; filename="usage-sessions.csv"');
+    return toCsv(rows);
   });
 
   // ---- Admin (pricing) -----------------------------------------------------
