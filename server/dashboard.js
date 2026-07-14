@@ -33,6 +33,28 @@ function optionsHtml(values, selected, allLabel) {
   return opts.join("");
 }
 
+/** Shared page CSS — reused by the dashboard and the per-session page. */
+const STYLE = `
+  body { font: 14px system-ui, sans-serif; margin: 24px; color: #1f2937; background: #f8fafc; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .meta { color: #6b7280; margin-bottom: 16px; }
+  table { border-collapse: collapse; width: 100%; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #eef2f7; }
+  th { background: #2563eb; color: #fff; font-weight: 600; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .num.tot { font-weight: 600; }
+  .proj { font-weight: 600; }
+  .dim { color: #9ca3af; font-size: 12px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  a.btn { display: inline-block; margin-bottom: 12px; padding: 6px 12px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; }
+  .note { margin-top: 16px; color: #9ca3af; font-size: 12px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: end; margin-bottom: 14px; padding: 12px; background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .filters label { display: flex; flex-direction: column; font-size: 12px; color: #6b7280; gap: 4px; }
+  .filters input, .filters select { font: 13px system-ui, sans-serif; padding: 5px 8px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; }
+  .filters button { padding: 6px 14px; background: #2563eb; color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .filters a.clear { align-self: center; color: #6b7280; font-size: 12px; text-decoration: none; }
+`;
+
 function renderDashboard(rows, { from, to, member, project, key, options } = {}) {
   const opts = options || { members: [], projects: [], keys: [] };
   const total = rows.reduce((a, r) => a + (r.cost || 0), 0);
@@ -80,30 +102,13 @@ function renderDashboard(rows, { from, to, member, project, key, options } = {})
 <html lang="vi"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CodeTokens — Central Usage</title>
-<style>
-  body { font: 14px system-ui, sans-serif; margin: 24px; color: #1f2937; background: #f8fafc; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  .meta { color: #6b7280; margin-bottom: 16px; }
-  table { border-collapse: collapse; width: 100%; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #eef2f7; }
-  th { background: #2563eb; color: #fff; font-weight: 600; }
-  .num { text-align: right; font-variant-numeric: tabular-nums; }
-  .num.tot { font-weight: 600; }
-  .proj { font-weight: 600; }
-  .dim { color: #9ca3af; font-size: 12px; }
-  a.btn { display: inline-block; margin-bottom: 12px; padding: 6px 12px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; }
-  .note { margin-top: 16px; color: #9ca3af; font-size: 12px; }
-  .filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: end; margin-bottom: 14px; padding: 12px; background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-  .filters label { display: flex; flex-direction: column; font-size: 12px; color: #6b7280; gap: 4px; }
-  .filters input, .filters select { font: 13px system-ui, sans-serif; padding: 5px 8px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; }
-  .filters button { padding: 6px 14px; background: #2563eb; color: #fff; border: 0; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .filters a.clear { align-self: center; color: #6b7280; font-size: 12px; text-decoration: none; }
-</style></head>
+<style>${STYLE}</style></head>
 <body>
   <h1>Central Usage — member × dự án</h1>
   <div class="meta">Khoảng: ${range} · Tổng cost: <b>${fmtCost(total)}</b></div>
   ${filterBar}
   <a class="btn" href="${esc(csvHref)}">Export CSV</a>
+  <a class="btn" href="/sessions" style="background:#0891b2">Chi tiết theo session</a>
   <a class="btn" href="/admin" style="background:#475569">Quản trị bảng giá</a>
   <table>
     <thead><tr>
@@ -121,4 +126,4 @@ ${body}
 </body></html>`;
 }
 
-module.exports = { renderDashboard };
+module.exports = { renderDashboard, esc, fmtCost, fmtTokens, optionsHtml, STYLE };
