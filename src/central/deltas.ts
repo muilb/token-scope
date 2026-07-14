@@ -40,6 +40,8 @@ export interface Delta {
   costEstimate: number;
   /** Byte offset reached after this delta (Claude) — for advancing the cursor on 2xx. */
   _nextByteOffset?: number;
+  /** message.id:requestId of the last response counted (Claude) — persisted for cross-tick dedup. */
+  _nextMsgKey?: string;
   /** committed_* reached after this delta (Codex) — for advancing on 2xx. */
   _nextCommittedTotal?: number;
   _nextCommittedInput?: number;
@@ -182,6 +184,15 @@ function readClaudeSession(
   let model = "unknown";
   let tsFrom = "", tsTo = "";
 
+  // Dedup by API response identity (message.id:requestId), NOT the JSONL line:
+  // a multi-block response repeats the same `usage` across several lines, so
+  // summing every line double-counts its tokens. Seed with the last key counted
+  // (persisted in the cursor) so a duplicate that arrives on a later tick — the
+  // blocks can be written seconds apart — is still skipped. See cursor.lastMsgKey.
+  const seen = new Set<string>();
+  if (cursor.lastMsgKey) seen.add(cursor.lastMsgKey);
+  let lastMsgKey = cursor.lastMsgKey;
+
   for (const rawLine of buf.toString("utf8").split("\n")) {
     const line = rawLine.trim();
     if (!line) continue;
@@ -193,8 +204,15 @@ function readClaudeSession(
     }
     if (!cwd && obj.cwd) cwd = obj.cwd;
     if (obj.type !== "assistant") continue;
-    const usage = obj.message?.usage;
+    const msg = obj.message;
+    const usage = msg?.usage;
     if (!usage) continue;
+    const key = msg?.id && obj.requestId ? `${msg.id}:${obj.requestId}` : "";
+    if (key && seen.has(key)) continue;
+    if (key) {
+      seen.add(key);
+      lastMsgKey = key;
+    }
     const ts: string = obj.timestamp ?? "";
     if (ts) {
       if (!tsFrom) tsFrom = ts;
@@ -204,13 +222,14 @@ function readClaudeSession(
     output += usage.output_tokens ?? 0;
     cacheRead += usage.cache_read_input_tokens ?? 0;
     cacheWrite += usage.cache_creation_input_tokens ?? 0;
-    model = obj.message?.model ?? obj.model ?? model;
+    model = msg?.model ?? obj.model ?? model;
   }
 
   const total = input + output + cacheRead + cacheWrite;
   if (total === 0) {
-    // Only non-usage lines appended; still advance offset so we don't re-read.
-    store.set({ ...cursor, lastByteOffset: size });
+    // Nothing new to bill (only non-usage lines, or already-counted duplicates);
+    // still advance offset — and remember the last key — so we don't re-read.
+    store.set({ ...cursor, lastByteOffset: size, lastMsgKey });
     return null;
   }
 
@@ -231,6 +250,7 @@ function readClaudeSession(
     tokens: { input, output, cacheRead, cacheWrite },
     costEstimate: computeCost(input, output, cacheRead, cacheWrite, model),
     _nextByteOffset: size,
+    _nextMsgKey: lastMsgKey,
     _authMtime: ctx.authMtimes.claude,
   };
 }

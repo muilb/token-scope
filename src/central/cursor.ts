@@ -25,6 +25,14 @@ export interface Cursor {
   cumTokens: number;
   /** mtime of the auth file at the time of the last processed delta. */
   lastAuthMtime?: number;
+  /**
+   * Claude: `message.id:requestId` of the last response counted. Claude Code
+   * writes one JSONL line per content block of a response, repeating the same
+   * `usage` on each — and those lines can straddle a tick boundary (seconds
+   * apart). Seeding the per-read dedup set with this key skips a trailing
+   * duplicate read on the next tick, so a multi-block response is billed once.
+   */
+  lastMsgKey?: string;
 }
 
 /** Minimal slice of vscode.Memento so this module is testable without vscode. */
