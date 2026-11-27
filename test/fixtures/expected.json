@@ -1,0 +1,24 @@
+{
+  "_comment": "Hand-computed from pricing/seed-v2.json. Used by the extension tests (src/core/core.test.ts) AND the server tests (server/test/pricing-v2.test.js) so both sides must agree to 1e-9.",
+  "pricingCases": [
+    { "name": "opus-5-5 1h cache write", "model": "claude-opus-5-5", "tokens": { "input": 100, "output": 1000, "cacheRead": 10000, "cacheWrite1h": 2000 }, "opts": {}, "cost": 0.0384 },
+    { "name": "opus-5-5 fast = 2x", "model": "claude-opus-5-5", "tokens": { "input": 100, "output": 1000, "cacheRead": 10000, "cacheWrite1h": 2000 }, "opts": { "speed": "fast" }, "cost": 0.0768 },
+    { "name": "haiku-5-5 long prompt tier", "model": "claude-haiku-5-5", "tokens": { "input": 1000, "output": 500, "cacheRead": 150000 }, "opts": { "tier": "long" }, "cost": 0.00925 },
+    { "name": "haiku-5-5 base tier", "model": "claude-haiku-5-5", "tokens": { "input": 1000, "output": 500, "cacheRead": 50000 }, "opts": { "tier": "base" }, "cost": 0.00085 },
+    { "name": "sonnet-5-5 + 3 web searches", "model": "claude-sonnet-5-5", "tokens": { "input": 10, "output": 10, "webSearch": 3 }, "opts": {}, "cost": 0.03012 },
+    { "name": "gpt-5.5 >272K tier", "model": "gpt-5.5", "tokens": { "input": 300000, "output": 1000 }, "opts": { "tier": "long" }, "cost": 3.045 },
+    { "name": "gpt-5.4-mini cached input", "model": "gpt-5.4-mini", "tokens": { "input": 1000, "output": 1000, "cacheRead": 1000 }, "opts": {}, "cost": 0.005325 },
+    { "name": "gpt-5.5-pro has no cached price -> input price", "model": "gpt-5.5-pro", "tokens": { "cacheRead": 1000 }, "opts": {}, "cost": 0.03 },
+    { "name": "unpriced model: web search only", "model": "mystery-model-1", "tokens": { "input": 5000, "webSearch": 2 }, "opts": {}, "cost": 0.02 },
+    { "name": "inference_geo us = 1.1x", "model": "claude-opus-5-5", "tokens": { "input": 1000000 }, "opts": { "geo": "us" }, "cost": 4.4 },
+    { "name": "sonnet-5-5 dated model id still matches", "model": "claude-sonnet-5-5-20260901", "tokens": { "output": 1000000 }, "opts": {}, "cost": 10 }
+  ],
+  "fixture": {
+    "sinceDay": "2026-11-01",
+    "claudeSessions": {
+      "aaaa1111-0000-4000-8000-000000000001": { "requests": 3, "tokens": 184600, "output": 1088, "subagentTokens": 151500, "cost": 0.061288 },
+      "bbbb2222-0000-4000-8000-000000000002": { "requests": 1, "tokens": 3055, "output": 50, "subagentTokens": 0, "cost": 0.00324 }
+    },
+    "codexSession": { "id": "rollout-2026-11-20T10-00-00-cccc3333", "requests": 2, "tokens": 3000, "cost": 0.00244875 }
+  }
+}

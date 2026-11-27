@@ -12,3 +12,5 @@ test.js
 **/*.test.*
 *.vsix
 improve/**
+pricing/**
+test/**

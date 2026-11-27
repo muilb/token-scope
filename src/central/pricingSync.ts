@@ -1,56 +1,82 @@
 /**
  * Pulls the admin-managed pricing table from the central server and applies it
  * to the local pricing module (setPricingOverride), so this machine's dashboard
- * matches central prices. One-way (server → extension); the extension never
- * pushes prices back.
+ * matches central prices. One-way (server → extension).
  *
- * Cached in globalState so we can apply the last-known prices at startup before
- * any network call — offline, or central disabled, falls back to the built-in
- * table baked into pricing.ts.
+ * Accepts pricing.v2 (absolute prices per component, dated rows) and, from an
+ * older server, pricing.v1 (input/output + cache ratios), converted to v2.
+ * Cached in globalState so the last-known prices apply at startup offline.
  */
 import * as vscode from "vscode";
-import { setPricingOverride } from "../pricing";
+import { setPricingOverride, PriceRow, PricingGlobals } from "../pricing";
 
-type Tuple = [number, number, number, number];
+const CACHE_KEY = "tokenscope.pricingCache.v2";
+const OLD_CACHE_KEY = "tokenscope.pricingCache";
 
-const CACHE_KEY = "tokenscope.pricingCache";
-
-interface PricingWire {
-  schema?: string;
-  updatedAt?: string;
-  models?: {
-    modelPrefix?: string;
-    inputPerM?: number;
-    outputPerM?: number;
-    cacheReadRatio?: number;
-    cacheCreateRatio?: number;
-  }[];
+interface Cached {
+  rows: PriceRow[];
+  globals?: PricingGlobals;
 }
 
-function num(v: unknown, dflt = 0): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : dflt;
+function num(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
-/** Convert the wire shape to the prefix→tuple map getPricing() expects.
- *  Keys are lower-cased to match the built-in table's matching behavior. */
-function toMap(wire: PricingWire): Record<string, Tuple> {
-  const map: Record<string, Tuple> = {};
-  for (const m of wire.models || []) {
+/** pricing.v2 wire → rows (unknown fields ignored, numbers validated). */
+export function rowsFromV2(models: any[]): PriceRow[] {
+  const out: PriceRow[] = [];
+  for (const m of models || []) {
     if (!m || !m.modelPrefix) continue;
-    map[String(m.modelPrefix).toLowerCase()] = [
-      num(m.inputPerM),
-      num(m.outputPerM),
-      num(m.cacheReadRatio, 0.1),
-      num(m.cacheCreateRatio, 1.25),
-    ];
+    const row: PriceRow = {
+      provider: typeof m.provider === "string" ? m.provider : undefined,
+      modelPrefix: String(m.modelPrefix).toLowerCase(),
+      effectiveFrom: typeof m.effectiveFrom === "string" ? m.effectiveFrom : undefined,
+      input: num(m.input) ?? 0,
+      output: num(m.output) ?? 0,
+    };
+    for (const k of [
+      "cachedInput",
+      "cacheWriteShort",
+      "cacheWriteLong",
+      "fastMultiplier",
+      "tierThreshold",
+      "tierInput",
+      "tierCachedInput",
+      "tierCacheWriteShort",
+      "tierCacheWriteLong",
+      "tierOutput",
+    ] as const) {
+      const v = num(m[k]);
+      if (v !== undefined) (row as any)[k] = v;
+    }
+    out.push(row);
   }
-  return map;
+  return out;
+}
+
+/** pricing.v1 wire (ratios) → v2 rows. */
+export function rowsFromV1(models: any[]): PriceRow[] {
+  const out: PriceRow[] = [];
+  for (const m of models || []) {
+    if (!m || !m.modelPrefix) continue;
+    const input = num(m.inputPerM) ?? 0;
+    out.push({
+      modelPrefix: String(m.modelPrefix).toLowerCase(),
+      input,
+      output: num(m.outputPerM) ?? 0,
+      cachedInput: input * (num(m.cacheReadRatio) ?? 0.1),
+      cacheWriteShort: input * (num(m.cacheCreateRatio) ?? 1.25),
+      cacheWriteLong: input * 2,
+    });
+  }
+  return out;
 }
 
 /** Apply the last cached prices (if any) synchronously at startup. */
 export function applyCachedPricing(context: vscode.ExtensionContext): void {
-  const cached = context.globalState.get<Record<string, Tuple>>(CACHE_KEY);
-  if (cached && Object.keys(cached).length) setPricingOverride(cached);
+  void context.globalState.update(OLD_CACHE_KEY, undefined); // v1 tuple cache is obsolete
+  const cached = context.globalState.get<Cached>(CACHE_KEY);
+  if (cached && Array.isArray(cached.rows) && cached.rows.length) setPricingOverride(cached);
 }
 
 /**
@@ -63,28 +89,28 @@ export async function syncPricing(
   cfg: { url: string; ingestKey: string },
 ): Promise<boolean> {
   const url = cfg.url.replace(/\/$/, "") + "/api/v1/pricing";
-  let wire: PricingWire;
+  let wire: any;
   try {
-    const res = await fetch(url, {
-      headers: cfg.ingestKey ? { "x-ingest-key": cfg.ingestKey } : {},
-    });
+    const res = await fetch(url, { headers: cfg.ingestKey ? { "x-ingest-key": cfg.ingestKey } : {} });
     if (!res.ok) {
       console.warn("tokenscope pricing sync: http", res.status);
       return false;
     }
-    wire = (await res.json()) as PricingWire;
+    wire = await res.json();
   } catch (e: any) {
     console.warn("tokenscope pricing sync failed:", e?.message || e);
     return false;
   }
-  if (!wire || wire.schema !== "pricing.v1" || !Array.isArray(wire.models)) return false;
+  if (!wire || !Array.isArray(wire.models)) return false;
+  let next: Cached;
+  if (wire.schema === "pricing.v2") next = { rows: rowsFromV2(wire.models), globals: wire.globals };
+  else if (wire.schema === "pricing.v1") next = { rows: rowsFromV1(wire.models) };
+  else return false;
+  if (!next.rows.length) return false; // never blank out to an empty table
 
-  const map = toMap(wire);
-  if (!Object.keys(map).length) return false; // never blank out to an empty table
-
-  const prev = context.globalState.get<Record<string, Tuple>>(CACHE_KEY);
-  const changed = JSON.stringify(prev || {}) !== JSON.stringify(map);
-  await context.globalState.update(CACHE_KEY, map);
-  setPricingOverride(map);
+  const prev = context.globalState.get<Cached>(CACHE_KEY);
+  const changed = JSON.stringify(prev || {}) !== JSON.stringify(next);
+  await context.globalState.update(CACHE_KEY, next);
+  setPricingOverride(next);
   return changed;
 }

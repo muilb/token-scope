@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.8.0
+
+0.7.0 was an internal build that only added per-project `apiKeyHelper`
+attribution; 0.8.0 merges it with the usage.v2 rework below.
+
+### Fixed — usage from `apiKeyHelper` projects was silently dropped
+- **Per-project API key attribution** (`src/readers/apiKeyHelper.ts`): Claude Code's
+  `apiKeyHelper` setting runs a command to fetch the key, so the key never reaches
+  `ANTHROPIC_API_KEY`. The identity reader saw no env key, fell back to the OAuth
+  credential file, and every delta was classified `oauth` → **dropped** (cursor
+  advancing, tokens lost). The helper's *command string* is now parsed for the env
+  var it names; that var is read and hashed, giving the same `keyHash` the machine
+  produced back when the key was exported directly — so history stays continuous.
+  Projects using different key vars are now attributed to different keys, which the
+  single global env var could never express.
+  - The helper command is **parsed, never executed** — a settings file can be shared
+    or committed, so running it would be arbitrary code execution from config.
+  - `"apiKeyHelper": ""` is read as an explicit "this project runs on the
+    subscription" and resolves to `oauth` (with the account's email + uuid).
+  - A helper that names an env var which is not set resolves to `unknown` and is
+    **held** — a misconfigured helper delays data instead of losing it.
+  - A helper that names no env var at all (a script, a vault call) is billed as
+    `apikey`, keyed by a hash of the command string, so it is never held forever.
+  - Env-key precedence is unchanged: a machine exporting `ANTHROPIC_API_KEY` /
+    `ANTHROPIC_AUTH_TOKEN` behaves exactly as in 0.6.0.
+  - Switching a project's helper mid-session now adds a new auth stamp for that
+    session, same as an OAuth login switch does.
+
+### Fixed — local dashboard counts and prices
+- **Subagent usage was not counted.** Transcripts under
+  `projects/<slug>/<session>/subagents/` are now read and attributed to the
+  parent session (about a fifth of all tokens on a subagent-heavy machine).
+- **Output tokens were undercounted.** Claude Code writes a response once per
+  content block while it is still streaming; the first line carries a partial
+  `output_tokens`. Lines of one request are now merged with a field-wise maximum.
+- **"Tokens today" drifted below the session table.** The 15 s poll advanced file
+  offsets without adding the new bytes to today's totals. Every number now comes
+  from one de-duplicated request store, recomputed on each refresh; a half-written
+  last line is re-read instead of lost; crossing midnight rebuilds the day.
+- **tok/min** was output ÷ time since the last request (floored at 0.1 min),
+  inflating it ~10×; it is now output in the last 5 minutes ÷ 5.
+- **Requests** counted merges, not requests.
+- **Per-session cost** priced all tokens at the session's last model; it is now
+  computed per request and per model in the extension.
+- A request copied into a resumed session is counted once, in the original.
+- Context-window colours/alerts in the panel use % of the session's own window
+  (a fixed 100K threshold flagged 1M-window sessions at 10%).
+
+### Changed — pricing v2 (shared with the server)
+- One table (`pricing/seed-v2.json`) and one formula (`pricing/cost.js`) for the
+  extension and the server; absolute prices per component (cache-read ratios now
+  differ by model), 5-minute vs 1-hour cache writes, long-prompt tiers (Haiku 5.5
+  > 100K, GPT > 272K), fast mode, `inference_geo: "us"`, web searches, and dated
+  rows (`effectiveFrom`). Prices read from the official pages on 2026-11-27,
+  including Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable/Mythos 5.x, GPT-5.6 / GPT-6.
+  Models without a price now cost $0 visibly instead of matching a `gpt-5` 0/0 row.
+
+### Changed — central usage (usage.v2)
+- **Every account type is pushed** (API key, Claude subscription / Teams, ChatGPT);
+  the server prices API-key usage only. Subscription usage is attributed to the
+  Claude / ChatGPT account (email + account uuid); API-key usage to
+  `tokenscope.owner` (use your email).
+- Pushes are **bucket snapshots** (absolute totals per session × day × model ×
+  speed × tier × origin), upserted by the server — idempotent and self-healing.
+- **Backfill**: the first run sends the last `tokenscope.central.backfillDays`
+  (default 30) days; the server stops counting v1 rows of a day once v2 covers it.
+- The secret check no longer matches long repository names (a 40-character repo
+  name blocked a machine's pushes forever); only real key/token shapes are caught,
+  and only the offending bucket is dropped.
+
+### Removed
+- `src/central/deltas.ts`, `src/central/cursor.ts`, `src/readers/codexReader.ts`
+  (replaced by `src/core/`).
+
 ## 0.5.0
 
 ### Added — Central pricing admin + sync

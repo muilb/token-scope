@@ -172,44 +172,8 @@ document.querySelectorAll(".lang-btn").forEach((btn) => {
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
-// Client-side pricing mirror (input/M, output/M, cache_read ratio, cache_create ratio).
-// Fallback only — the extension sends the effective table (incl. prices synced from
-// the central server) via state.pricing, which _pricingOverride prefers when present.
-const _PRICING = {
-  "claude-sonnet-5":    [3.00, 15.00, 0.10, 1.25],
-  "claude-sonnet-4-6":  [3.00, 15.00, 0.10, 1.25],
-  "claude-sonnet-4-5":  [3.00, 15.00, 0.10, 1.25],
-  "claude-haiku-4-5":   [1.00,  5.00, 0.10, 1.25],
-  "claude-haiku-4-6":   [1.00,  5.00, 0.10, 1.25],
-  "claude-opus-4-8":    [5.00, 25.00, 0.10, 1.25],
-  "claude-opus-4-7":    [5.00, 25.00, 0.10, 1.25],
-  "claude-opus-4-6":    [5.00, 25.00, 0.10, 1.25],
-  "claude-fable-5":    [10.00, 50.00, 0.10, 1.25],
-  "gpt-5.5":            [5.00, 30.00, 0.10, 0.00],
-  "gpt-5.4-mini":       [0.75,  4.50, 0.10, 0.00],
-  "gpt-5.4":            [2.50, 15.00, 0.10, 0.00],
-  "gpt-5.3-codex":      [2.50, 15.00, 0.10, 0.00],
-  "gpt-5.3":            [2.50, 15.00, 0.10, 0.00],
-};
-
-// Effective pricing pushed by the extension (built-in ⊕ synced central override).
-// Null until the first state update; then it takes precedence over _PRICING.
-let _pricingOverride = null;
-
-function _getPricing(model) {
-  const m = (model || "").toLowerCase();
-  const table = (_pricingOverride && Object.keys(_pricingOverride).length) ? _pricingOverride : _PRICING;
-  let bestKey = "", best = null;
-  for (const [k, v] of Object.entries(table)) {
-    if (m.startsWith(k) && k.length > bestKey.length) { bestKey = k; best = v; }
-  }
-  return best || [0, 0, 0, 0];
-}
-
-function _computeCost(inp, out, cr, cc, model) {
-  const [inpM, outM, crR, ccR] = _getPricing(model);
-  return inp / 1e6 * inpM + out / 1e6 * outM + cr / 1e6 * inpM * crR + cc / 1e6 * inpM * ccR;
-}
+// Every cost shown here is computed by the extension (per request, per model,
+// with the effective pricing table) — the webview never prices tokens itself.
 
 const fmtTok = (n) => {
   if (!n && n !== 0) return "-";
@@ -345,7 +309,7 @@ function render(state) {
   renderHistorical(state.historical_daily || [], state.codex_historical_daily || [], state.historical_costs || {});
 
   // Sessions table
-  renderSessionsTable(state.active_sessions || [], state.codex_today_sessions || [], state.today_by_model || {});
+  renderSessionsTable(state.today_sessions || []);
 
   // Timestamp
   const now = new Date();
@@ -399,7 +363,7 @@ function renderSessionList(sessions) {
           <span style="font-weight:600;color:${color};">${pct}%</span>
         </div>
         <div style="height:7px;background:#eef0f3;border-radius:99px;overflow:hidden;">
-          <div style="height:100%;width:${pct}%;background:${isIdle ? "#d1d1d6" : _ctxBarColor(sess.ctx_tokens || 0)};border-radius:99px;transition:width .4s;"></div>
+          <div style="height:100%;width:${pct}%;background:${isIdle ? "#d1d1d6" : _ctxBarColor(pct)};border-radius:99px;transition:width .4s;"></div>
         </div>
       </div>
       ${rightCol}
@@ -628,71 +592,43 @@ function renderHistorical(claudeDaily, codexDaily, historicalCosts) {
   document.getElementById("hist-total-cost").textContent = fmtCost(totalCost);
 }
 
-function renderSessionsTable(claudeSessions, codexSessions, byModel) {
-  // Build per-session cost map from byModel for Claude sessions
-  const claudeSessionCost = {};
-  Object.values(byModel).forEach((m) => {
-    claudeSessionCost._total = (claudeSessionCost._total || 0) + (m.cost_usd || 0);
+// Every session with usage today (Claude + Codex), most recent first. Tokens,
+// requests and cost are the session's totals for today — computed per request and
+// per model by the extension, so a mid-session /model switch is priced correctly
+// and subagent usage is included.
+function renderSessionsTable(sessions) {
+  const rows = sessions.slice(0, 30).map((s) => {
+    const isCodex = _sessionTool(s) === "codex";
+    const ctx = s.ctx_tokens || 0;
+    const win = s.context_window || 0;
+    const showCtx = s.status !== "done" && win > 0;
+    const models = Array.isArray(s.models) ? s.models : [];
+    const modelLabel = models.length > 1
+      ? `${_shortModel(s.model)} +${models.length - 1}`
+      : _shortModel(s.model);
+    return {
+      tool: isCodex ? "Codex" : "Claude",
+      toolColor: isCodex ? "#7c3aed" : "#2563eb",
+      toolBg: isCodex ? "#f4efff" : "#eff4ff",
+      session_id: s.session_id || "-",
+      model: modelLabel,
+      modelTitle: models.map((m) => `${m.model}: ${fmtTok(m.total)} · ${fmtCost(m.cost_usd || 0)}`).join("\n"),
+      project: _shortCwd(s.cwd || s.project_slug || ""),
+      status: s.status === "active" ? "active" : "past",
+      input: s.input ?? 0,
+      output: s.output ?? 0,
+      cache_read: s.cache_read ?? 0,
+      cache_create: s.cache_create ?? 0,
+      tokens: showCtx ? ctx : (s.total || 0),
+      ctxPct: showCtx ? Math.min(Math.round(ctx / win * 100), 100) : null,
+      ctxWin: showCtx ? win : null,
+      cost: s.cost_usd ?? null,
+      requests: s.requests || 0,
+      subagentPct: s.total > 0 && s.subagent_tokens > 0 ? Math.round(s.subagent_tokens / s.total * 100) : 0,
+      lastAgo: _agoLabel(s.last_seen),
+      _raw: s,
+    };
   });
-
-  const todayStr = new Date().toISOString().slice(0, 10);
-
-  const rows = [
-    ...claudeSessions.map((s) => {
-      const ctx     = s.ctx_tokens || 0;
-      const win     = s.context_window || 200000;
-      const ctxPct  = Math.min(Math.round(ctx / win * 100), 100);
-      const lastAgo = _agoLabel(s.last_seen);
-      const inp = s.input        ?? null;
-      const out = s.output       ?? null;
-      const cr  = s.cache_read   ?? null;
-      const cc  = s.cache_create ?? null;
-      const cost = (inp !== null)
-        ? _computeCost(inp ?? 0, out ?? 0, cr ?? 0, cc ?? 0, s.model || "")
-        : null;
-      return {
-        tool: "Claude", toolColor: "#2563eb", toolBg: "#eff4ff",
-        session_id: s.session_id || "-",
-        model: _shortModel(s.model),
-        project: _shortCwd(s.cwd || s.project_slug || ""),
-        status: "active",
-        input: inp, output: out, cache_read: cr, cache_create: cc,
-        tokens: ctx, ctxPct, ctxWin: win,
-        cost,
-        tpm: s.tok_per_min || 0,
-        lastAgo,
-        _raw: s,
-      };
-    }),
-    ...codexSessions.slice(0, 8).map((s) => {
-      const totalInp = s.committed_input  ?? s.input  ?? 0;
-      const out      = s.committed_output ?? s.output ?? 0;
-      const cr       = s.committed_cached ?? s.cached ?? 0;
-      const tot      = s.committed_total  ?? s.total  ?? 0;
-      // Codex input_tokens is cumulative (uncached + cached), split it out
-      const uncachedInp = Math.max(totalInp - cr, 0);
-      const cost = s.cost_usd ?? null;
-      const lastAgo = _agoLabel(s.last_seen || s.started_at);
-      return {
-        tool: "Codex", toolColor: "#7c3aed", toolBg: "#f4efff",
-        session_id: s.session_id || "-",
-        model: s.model || t("unknown"),
-        project: _shortCwd(s.cwd || ""),
-        status: s.date === todayStr ? "today" : "past",
-        input: uncachedInp,
-        output: out,
-        cache_read: cr,
-        cache_create: 0,
-        tokens: tot,
-        ctxPct: null,
-        ctxWin: null,
-        cost,
-        tpm: s.tok_per_min || 0,
-        lastAgo,
-        _raw: s,
-      };
-    }),
-  ].slice(0, 12);
 
   const tbody = document.getElementById("sessions-table-body");
   if (!rows.length) {
@@ -716,8 +652,8 @@ function renderSessionsTable(claudeSessions, codexSessions, byModel) {
       <span style="${hStyle};text-align:right;">Output</span>
       <span style="${hStyle};text-align:right;color:#14b8a6;">CR</span>
       <span style="${hStyle};text-align:right;color:#94a3b8;">CW</span>
-      <span style="${hStyle};text-align:right;">tok/min</span>
-      <span style="${hStyle}">Context</span>
+      <span style="${hStyle};text-align:right;">Req</span>
+      <span style="${hStyle}">Context / Total</span>
       <span style="${hStyle};text-align:right;">Cost</span>
     `;
   }
@@ -729,10 +665,10 @@ function renderSessionsTable(claudeSessions, codexSessions, byModel) {
     // Context cell
     let ctxCell;
     if (r.ctxPct !== null) {
-      const barColor = _ctxBarColor(r.tokens);
-      const ctxWarnStyle = r.tokens >= CTX_ALERT_THRESHOLD
+      const barColor = _ctxBarColor(r.ctxPct);
+      const ctxWarnStyle = r.ctxPct >= CTX_ALERT_PCT
         ? "color:#dc2626;font-weight:700;"
-        : r.tokens >= CTX_WARN_THRESHOLD
+        : r.ctxPct >= CTX_WARN_PCT
           ? "color:#d97706;font-weight:700;"
           : "color:#1d1d1f;";
       ctxCell = `
@@ -762,17 +698,17 @@ function renderSessionsTable(claudeSessions, codexSessions, byModel) {
       </span>
       <div>
         <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;color:#1d1d1f;font-weight:500;">${r.session_id.slice(0, 8)}</div>
-        <div style="font-size:11px;color:#9b9ba0;margin-top:2px;">${r.lastAgo}</div>
+        <div style="font-size:11px;color:#9b9ba0;margin-top:2px;">${r.lastAgo}${r.subagentPct ? ` · <span title="subagent">sub ${r.subagentPct}%</span>` : ""}</div>
       </div>
       <div>
-        <div style="color:#1d1d1f;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.model}</div>
+        <div style="color:#1d1d1f;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.modelTitle}">${r.model}</div>
         <div style="font-size:11px;color:#86868b;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${r.project}">${r.project}</div>
       </div>
       <span style="text-align:right;color:#6e6e73;font-variant-numeric:tabular-nums;">${r.input !== null ? fmtTok(r.input) : "—"}</span>
       <span style="text-align:right;color:#6e6e73;font-variant-numeric:tabular-nums;">${r.output !== null ? fmtTok(r.output) : "—"}</span>
       <span style="text-align:right;color:#14b8a6;font-weight:600;font-variant-numeric:tabular-nums;">${r.cache_read !== null ? fmtTok(r.cache_read) : "—"}</span>
       <span style="text-align:right;color:#94a3b8;font-variant-numeric:tabular-nums;">${r.cache_create !== null ? fmtTok(r.cache_create) : "—"}</span>
-      <span style="text-align:right;color:#6e6e73;font-variant-numeric:tabular-nums;">${r.tpm > 0 ? fmtTok(r.tpm) : "—"}</span>
+      <span style="text-align:right;color:#6e6e73;font-variant-numeric:tabular-nums;">${r.requests || "—"}</span>
       ${ctxCell}
       <span style="text-align:right;font-weight:600;color:#1d1d1f;font-variant-numeric:tabular-nums;">${r.cost != null ? fmtCost(r.cost) : "—"}</span>
     </div>`;
@@ -855,8 +791,15 @@ function _codexModelWindow(model) {
 // ---------------------------------------------------------------------------
 // Context window alert system
 // ---------------------------------------------------------------------------
-const CTX_WARN_THRESHOLD  = 70_000;   // yellow
-const CTX_ALERT_THRESHOLD = 100_000;  // red + notify
+// Percent of the session's own context window (a fixed token count misfires on
+// 1M-window models: 200K of 1M is 20%, not "full").
+const CTX_WARN_PCT  = 60;  // yellow
+const CTX_ALERT_PCT = 80;  // red + notify
+
+function _ctxPct(sess) {
+  const win = _sessionContextWindow(sess) || 0;
+  return win > 0 ? Math.min(Math.round((sess.ctx_tokens || 0) / win * 100), 100) : 0;
+}
 
 // Track which sessions have already fired a notification — persisted to survive F5
 const _NS_KEY = "tokenscope-notified";
@@ -970,7 +913,7 @@ function checkContextAlerts(sessions) {
 
   sessions.forEach((sess) => {
     const ctx = sess.ctx_tokens || 0;
-    if (ctx < CTX_ALERT_THRESHOLD) return;
+    if (_ctxPct(sess) < CTX_ALERT_PCT) return;
 
     critical.push(sess);
 
@@ -993,9 +936,9 @@ function checkContextAlerts(sessions) {
 }
 
 // Progress bar color based on ctx usage
-function _ctxBarColor(ctx) {
-  if (ctx >= CTX_ALERT_THRESHOLD) return "linear-gradient(90deg,#f87171,#dc2626)";
-  if (ctx >= CTX_WARN_THRESHOLD)  return "linear-gradient(90deg,#fbbf24,#f59e0b)";
+function _ctxBarColor(pct) {
+  if (pct >= CTX_ALERT_PCT) return "linear-gradient(90deg,#f87171,#dc2626)";
+  if (pct >= CTX_WARN_PCT)  return "linear-gradient(90deg,#fbbf24,#f59e0b)";
   return "linear-gradient(90deg,#5b9bff,#2563eb)";
 }
 
@@ -1013,7 +956,6 @@ function connectVscode() {
   window.addEventListener("message", (e) => {
     const msg = e.data;
     if (msg && msg.type === "update") {
-      if (msg.data && msg.data.pricing) _pricingOverride = msg.data.pricing;
       render(msg.data);
       startUpdateTimer();
     }

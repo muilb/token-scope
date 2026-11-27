@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deriveClaude, deriveCodex } from "./identity";
+import { deriveClaude, deriveClaudeForCwd, deriveCodex } from "./identity";
+import { classifyHelper } from "./apiKeyHelper";
 import { resolveProject } from "../identity/projectMap";
 
 // A real-looking secret we must never see leak into derived output.
@@ -108,4 +109,57 @@ test("resolveProject: falls back to keyHash", () => {
 
 test("resolveProject: fallback to basename", () => {
   assert.equal(resolveProject("d:/Work/Projects/MyRepo", undefined, {}), "myrepo");
+});
+
+// ---------------------------------------------------------------------------
+// 0.7: subscription account identity, settings-file keys, ChatGPT claims
+// ---------------------------------------------------------------------------
+test("claude: oauth carries the logged-in account (uuid, email, name) from ~/.claude.json", () => {
+  const id = deriveClaude(
+    {},
+    { claudeAiOauth: { subscriptionType: "team", accessToken: FAKE_ANTHROPIC_TOKEN, refreshToken: FAKE_ANTHROPIC_TOKEN } },
+    { accountUuid: "11111111-2222-3333-4444-555555555555", emailAddress: "dev1@example.com", displayName: "Dev One", organizationUuid: "a1b2c3d4-5678-90ab-cdef-1234567890ab", seatTier: "standard" },
+  );
+  assert.equal(id.authType, "oauth");
+  assert.equal(id.accountUuid, "11111111-2222-3333-4444-555555555555");
+  assert.equal(id.email, "dev1@example.com");
+  assert.equal(id.displayName, "Dev One");
+  assert.equal(id.orgShort, "a1b2c3d4");
+  assert.ok(!JSON.stringify(id).includes("sk-ant-"), "tokens never copied");
+});
+
+test("claude: API key set in ~/.claude/settings.json env counts as apikey (VS Code env may lack it)", () => {
+  const id = deriveClaude({}, { claudeAiOauth: { subscriptionType: "max" } }, null, { env: { ANTHROPIC_API_KEY: FAKE_ANTHROPIC_TOKEN } });
+  assert.equal(id.authType, "apikey");
+  assert.equal(id.keySource, "settings");
+  assert.equal(id.keyHash!.length, 8);
+  assertNoSecret(id);
+});
+
+test("claude: apiKeyHelper is not judged globally — deriveClaude ignores it (resolved per project)", () => {
+  const id = deriveClaude({}, { claudeAiOauth: { subscriptionType: "max" } }, null, { apiKeyHelper: "~/bin/get-key.sh" });
+  assert.equal(id.authType, "oauth");
+});
+
+test("claude: two projects with two helper vars bill to two keys", () => {
+  const env = { "PA-ANTHROPIC_API_KEY": "sk-ant-api03-FAKE-A-000000000000", "PB-ANTHROPIC_API_KEY": "sk-ant-api03-FAKE-B-000000000000" };
+  const cred = { claudeAiOauth: { subscriptionType: "max" } };
+  const a = deriveClaudeForCwd(env, cred, classifyHelper({ cmd: "printenv PA-ANTHROPIC_API_KEY", mtime: 1 }, env));
+  const b = deriveClaudeForCwd(env, cred, classifyHelper({ cmd: "printenv PB-ANTHROPIC_API_KEY", mtime: 1 }, env));
+  assert.equal(a.authType, "apikey");
+  assert.equal(b.authType, "apikey");
+  assert.notEqual(a.keyHash, b.keyHash);
+  assertNoSecret(a);
+  assertNoSecret(b);
+});
+
+test("codex: chatgpt login exposes account id, email and plan from id_token claims only", () => {
+  const claims = { email: "dev1@example.com", "https://api.openai.com/auth": { chatgpt_plan_type: "business", chatgpt_account_id: "acc-1" } };
+  const jwt = "eyJhbGciOiJub25lIn0." + Buffer.from(JSON.stringify(claims)).toString("base64url") + ".sig";
+  const id = deriveCodex({ auth_mode: "chatgpt", tokens: { id_token: jwt, access_token: "secret-access" } });
+  assert.equal(id.authType, "chatgpt");
+  assert.equal(id.email, "dev1@example.com");
+  assert.equal(id.plan, "business");
+  assert.equal(id.accountId, "acc-1");
+  assert.ok(!JSON.stringify(id).includes("secret-access"));
 });
