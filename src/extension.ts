@@ -13,7 +13,6 @@ import {
 } from "./aggregator";
 import { activateCentral, deactivateCentral } from "./central/wire";
 import { applyCachedPricing } from "./central/pricingSync";
-import { pricingSnapshot } from "./pricing";
 
 let statusBarItem: vscode.StatusBarItem | undefined;
 let watchers: fs.FSWatcher[] = [];
@@ -39,9 +38,8 @@ function applyContextOverride(): void {
 }
 
 function broadcast(state: DashboardState): void {
-  // Attach the effective pricing table so the webview's per-session cost uses the
-  // same prices as the extension (including any synced from the central server).
-  (state as any).pricing = pricingSnapshot();
+  // Every cost (KPIs, per-session, per-model) is computed in the extension with
+  // the effective pricing table; the webview only displays.
   for (const w of sinks) {
     w.postMessage({ type: "update", data: state }).then(undefined, () => {});
   }
@@ -131,8 +129,8 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 
 function registerSink(webview: vscode.Webview): vscode.Disposable {
   sinks.add(webview);
-  // Push current state immediately (with the effective pricing table attached).
-  webview.postMessage({ type: "update", data: { ...getState(), pricing: pricingSnapshot() } }).then(undefined, () => {});
+  // Push current state immediately.
+  webview.postMessage({ type: "update", data: getState() }).then(undefined, () => {});
   const msgSub = webview.onDidReceiveMessage((msg) => {
     if (msg?.type === "refresh") {
       const state = buildFullState(daysBack());

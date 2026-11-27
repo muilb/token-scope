@@ -1,0 +1,2 @@
+{"type":"user","cwd":"D:\\Work\\demo-app","timestamp":"2026-11-20T05:01:30.000Z","isSidechain":true,"message":{"role":"user","content":"explore"}}
+{"type":"assistant","timestamp":"2026-11-20T05:01:40.000Z","requestId":"req_C","isSidechain":true,"message":{"id":"msg_C","model":"claude-haiku-5-5","usage":{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":150000,"cache_creation_input_tokens":0}}}

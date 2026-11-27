@@ -1,0 +1,3 @@
+{"type":"user","cwd":"D:\\Work\\demo-app","timestamp":"2026-11-20T06:00:00.000Z","message":{"role":"user","content":"resume"}}
+{"type":"assistant","timestamp":"2026-11-20T05:00:03.000Z","requestId":"req_A","message":{"id":"msg_A","model":"claude-opus-5-5","usage":{"input_tokens":2,"output_tokens":488,"cache_read_input_tokens":10000,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2000},"speed":"standard"}}}
+{"type":"assistant","timestamp":"2026-11-20T06:00:05.000Z","requestId":"req_D","message":{"id":"msg_D","model":"claude-opus-5-5","usage":{"input_tokens":5,"output_tokens":50,"cache_read_input_tokens":3000,"cache_creation_input_tokens":0,"speed":"fast"}}}
