@@ -5,7 +5,11 @@
  *   PORT          (default 8787)
  *   HOST          (default 127.0.0.1 — LAN/VPN only, not exposed to Internet)
  *   INGEST_KEY    shared token clients send as X-Ingest-Key (empty = no gate; dev only)
- *   ADMIN_KEY     protects /admin + pricing edits (empty = open; dev only)
+ *   ADMIN_KEY     protects /admin (pricing, members, teams) — empty = open; dev only
+ *   VIEW_KEY      protects the company-wide dashboard + CSV (/, /sessions, /api/v1/summary…);
+ *                 ADMIN_KEY also opens them. Empty (and no ADMIN_KEY) = open; dev only.
+ *                 PMs use their own team link (/team?k=…) instead.
+ *   PRICING_SEED  path to pricing/seed-v2.json (default ../pricing/seed-v2.json)
  *   DB_PATH       (default ./data/usage.db)
  */
 const path = require("path");
@@ -16,17 +20,19 @@ const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || "127.0.0.1";
 const INGEST_KEY = process.env.INGEST_KEY || "";
 const ADMIN_KEY = process.env.ADMIN_KEY || "";
+const VIEW_KEY = process.env.VIEW_KEY || "";
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data", "usage.db");
 
 const db = openDb(DB_PATH);
-const app = buildApp(db, { ingestKey: INGEST_KEY, adminKey: ADMIN_KEY });
+const app = buildApp(db, { ingestKey: INGEST_KEY, adminKey: ADMIN_KEY, viewKey: VIEW_KEY });
 
 app
   .listen({ port: PORT, host: HOST })
   .then(() => {
     console.log(`tokenscope-central listening on http://${HOST}:${PORT}  (db: ${DB_PATH})`);
     if (!INGEST_KEY) console.warn("WARN: INGEST_KEY empty — ingest is unauthenticated (dev only).");
-    if (!ADMIN_KEY) console.warn("WARN: ADMIN_KEY empty — pricing admin (/admin) is open (dev only).");
+    if (!ADMIN_KEY) console.warn("WARN: ADMIN_KEY empty — admin (/admin) is open (dev only).");
+    if (!VIEW_KEY && !ADMIN_KEY) console.warn("WARN: VIEW_KEY and ADMIN_KEY empty — company-wide dashboard is open to anyone on the network (dev only).");
   })
   .catch((e) => {
     console.error(e);

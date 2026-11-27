@@ -1,153 +1,183 @@
 "use strict";
 /**
- * Server-side pricing: read the admin-managed `pricing` table and compute cost
- * from raw tokens. Mirrors token-dashboard-ext/src/pricing.ts (same formula,
- * same longest-prefix match) so the central dashboard and the local extension
- * dashboards agree once the extension has synced prices.
+ * Server-side pricing v2. The formula is ../pricing/cost.js — the SAME file the
+ * extension bundles, so the central dashboard and every member's local
+ * dashboard compute identical costs. Prices live in `pricing_v2` (absolute
+ * per-component prices, dated by effective_from) and are admin-editable.
  *
- * Cost is recomputed at query time (never trusts the client's cost_estimate),
- * so editing a price re-values both historical and new usage immediately.
+ * Cost is recomputed at query time (the client's numbers are never trusted).
+ * A dated row re-prices only the days on/after its effective_from; editing a
+ * row re-prices every day that row covers.
  */
+const path = require("path");
+const core = require(path.join(__dirname, "..", "pricing", "cost.js"));
+const { BASE_FROM, V2_COLS } = require("./db");
 
-// In-memory cache of the pricing table, invalidated on any write (see invalidate()).
+// In-memory cache, invalidated on any write.
 let cache = null;
 
-/**
- * Load pricing as a Map<prefix, tuple> where tuple =
- * [input_per_m, output_per_m, cache_read_ratio, cache_create_ratio].
- * Cached until invalidate() is called.
- */
-function loadPricing(db) {
-  if (cache) return cache;
-  const rows = db.prepare("SELECT * FROM pricing").all();
-  const map = new Map();
-  for (const r of rows) {
-    map.set(r.model_prefix, [
-      r.input_per_m,
-      r.output_per_m,
-      r.cache_read_ratio,
-      r.cache_create_ratio,
-    ]);
+function toRow(r) {
+  const out = {};
+  for (const [col, key] of V2_COLS) {
+    const v = r[col];
+    if (v === null || v === undefined) continue;
+    out[key] = v;
   }
-  cache = map;
-  return map;
+  if (out.effectiveFrom === BASE_FROM) delete out.effectiveFrom;
+  return out;
 }
 
-/** Drop the cache so the next loadPricing() re-reads the table. */
+/** { rows: PriceRow[], globals } — cached until invalidate(). */
+function loadPricing(db) {
+  if (cache) return cache;
+  const rows = db.prepare("SELECT * FROM pricing_v2").all().map(toRow);
+  const globals = {};
+  for (const g of db.prepare("SELECT key, value FROM pricing_globals").all()) globals[g.key] = g.value;
+  cache = { rows, globals };
+  return cache;
+}
+
 function invalidate() {
   cache = null;
 }
 
-/** Pricing tuple for a model, longest-prefix match; unknown → [0,0,0,0]. */
-function getPricing(map, model) {
-  const modelLower = String(model || "").toLowerCase();
-  let bestKey = "";
-  for (const key of map.keys()) {
-    if (modelLower.startsWith(key) && key.length > bestKey.length) bestKey = key;
-  }
-  return map.get(bestKey) || [0, 0, 0, 0];
+/** USD cost of one usage row (needs model, date, speed, tier, geo and token columns). */
+function costOfRow(ctx, r) {
+  const row = core.findPrice(ctx.rows, r.model, r.date);
+  return core.costOf(
+    row,
+    {
+      input: r.input,
+      output: r.output,
+      cacheRead: r.cache_read,
+      cacheWrite5m: r.cache_write_5m,
+      cacheWrite1h: r.cache_write_1h,
+      webSearch: r.web_search,
+    },
+    { speed: r.speed, tier: r.tier, geo: r.geo },
+    ctx.globals,
+  );
 }
 
-function round(n, dp) {
-  const f = 10 ** dp;
-  return Math.round(n * f) / f;
+function isPriced(ctx, model) {
+  return core.findPrice(ctx.rows, model) !== null;
 }
 
-/** Cost for one (tokens, model) pair against the given pricing map. */
-function computeCost(map, tokens, model) {
-  const [inpM, outM, crRatio, ccRatio] = getPricing(map, model);
-  const input = num(tokens.input);
-  const output = num(tokens.output);
-  const cacheRead = num(tokens.cacheRead);
-  const cacheCreate = num(tokens.cacheCreate);
-  const cost =
-    (input / 1_000_000) * inpM +
-    (output / 1_000_000) * outM +
-    (cacheRead / 1_000_000) * inpM * crRatio +
-    (cacheCreate / 1_000_000) * inpM * ccRatio;
-  return round(cost, 6);
-}
-
-function num(v) {
-  return typeof v === "number" && Number.isFinite(v) ? v : 0;
-}
-
-/** True if the model has no matching price prefix (→ counted at cost 0). */
-function isUnpriced(map, model) {
-  const [i, o] = getPricing(map, model);
-  // A price row of [0,0,...] (e.g. free/older models) still counts as "priced".
-  const modelLower = String(model || "").toLowerCase();
-  for (const key of map.keys()) {
-    if (modelLower.startsWith(key)) return false;
-  }
-  return true;
-}
-
-/** Distinct models in usage_delta that have no matching price row. */
-function unpricedModels(db, map) {
+/** Distinct API-key models (the only usage that is priced) with no matching price row. */
+function unpricedModels(db, ctx) {
   const rows = db
-    .prepare("SELECT DISTINCT model FROM usage_delta WHERE model <> '' ORDER BY model")
+    .prepare("SELECT DISTINCT model FROM usage_all WHERE model <> '' AND auth_type = 'apikey' ORDER BY model")
     .all();
-  return rows.map((r) => r.model).filter((m) => isUnpriced(map, m));
+  return rows.map((r) => r.model).filter((m) => !isPriced(ctx, m));
 }
 
-/** All price rows, ordered for the admin table. */
 function listPricing(db) {
-  return db.prepare("SELECT * FROM pricing ORDER BY model_prefix").all();
+  return db.prepare("SELECT * FROM pricing_v2 ORDER BY model_prefix, effective_from").all();
 }
 
-/** Upsert one price row; validates non-empty prefix and non-negative numbers. */
-function upsertPricing(db, row, updatedBy) {
-  const prefix = String(row.model_prefix || "").trim();
-  if (!prefix) throw new Error("model_prefix required");
-  const inputPerM = mustNonNeg(row.input_per_m, "input_per_m");
-  const outputPerM = mustNonNeg(row.output_per_m, "output_per_m");
-  const crRatio = mustNonNeg(row.cache_read_ratio != null ? row.cache_read_ratio : 0.1, "cache_read_ratio");
-  const ccRatio = mustNonNeg(row.cache_create_ratio != null ? row.cache_create_ratio : 1.25, "cache_create_ratio");
-  db.prepare(
-    `INSERT INTO pricing (model_prefix, input_per_m, output_per_m, cache_read_ratio, cache_create_ratio, note, updated_at, updated_by)
-     VALUES (@prefix, @inputPerM, @outputPerM, @crRatio, @ccRatio, @note, @now, @by)
-     ON CONFLICT (model_prefix) DO UPDATE SET
-       input_per_m = excluded.input_per_m,
-       output_per_m = excluded.output_per_m,
-       cache_read_ratio = excluded.cache_read_ratio,
-       cache_create_ratio = excluded.cache_create_ratio,
-       note = excluded.note,
-       updated_at = excluded.updated_at,
-       updated_by = excluded.updated_by`,
-  ).run({
-    prefix,
-    inputPerM,
-    outputPerM,
-    crRatio,
-    ccRatio,
-    note: String(row.note || ""),
-    now: new Date().toISOString(),
-    by: String(updatedBy || ""),
-  });
-  invalidate();
+function listGlobals(db) {
+  return db.prepare("SELECT key, value FROM pricing_globals ORDER BY key").all();
 }
 
-function deletePricing(db, prefix) {
-  db.prepare("DELETE FROM pricing WHERE model_prefix = ?").run(String(prefix || ""));
-  invalidate();
-}
+const NUM_COLS = V2_COLS.map((c) => c[0]).filter((c) => !["provider", "model_prefix", "effective_from", "note"].includes(c));
+const REQUIRED = new Set(["input", "output"]);
 
-function mustNonNeg(v, name) {
+function parseNum(v, name) {
+  if (v === undefined || v === null || String(v).trim() === "") {
+    if (REQUIRED.has(name)) throw new Error(`${name} là bắt buộc`);
+    return null;
+  }
   const n = Number(v);
-  if (!Number.isFinite(n) || n < 0) throw new Error(`${name} must be a number >= 0`);
+  if (!Number.isFinite(n) || n < 0) throw new Error(`${name} phải là số >= 0`);
   return n;
+}
+
+/** Insert or update one dated price row (admin form). */
+function upsertPricing(db, body, updatedBy) {
+  const prefix = String(body.model_prefix || "").trim().toLowerCase();
+  if (!prefix) throw new Error("model_prefix là bắt buộc");
+  const from = String(body.effective_from || "").trim() || BASE_FROM;
+  if (from !== BASE_FROM && !/^\d{4}-\d{2}-\d{2}$/.test(from)) throw new Error("effective_from phải dạng YYYY-MM-DD");
+  const vals = {
+    provider: String(body.provider || "").trim(),
+    model_prefix: prefix,
+    effective_from: from,
+    note: String(body.note || ""),
+    updated_at: new Date().toISOString(),
+    updated_by: String(updatedBy || ""),
+  };
+  for (const c of NUM_COLS) vals[c] = parseNum(body[c], c);
+  const cols = Object.keys(vals);
+  db.prepare(
+    `INSERT INTO pricing_v2 (${cols.join(", ")}) VALUES (${cols.map((c) => "@" + c).join(", ")})
+     ON CONFLICT (model_prefix, effective_from) DO UPDATE SET
+     ${cols.filter((c) => c !== "model_prefix" && c !== "effective_from").map((c) => `${c} = excluded.${c}`).join(", ")}`,
+  ).run(vals);
+  invalidate();
+}
+
+function deletePricing(db, prefix, effectiveFrom) {
+  db.prepare("DELETE FROM pricing_v2 WHERE model_prefix = ? AND effective_from = ?").run(
+    String(prefix || "").toLowerCase(),
+    String(effectiveFrom || "") || BASE_FROM,
+  );
+  invalidate();
+}
+
+function setGlobal(db, key, value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) throw new Error(`${key} phải là số >= 0`);
+  db.prepare("INSERT INTO pricing_globals (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(key, n);
+  invalidate();
+}
+
+/** pricing.v2 wire for the extension. */
+function wireV2(db) {
+  const ctx = loadPricing(db);
+  const rows = listPricing(db);
+  return {
+    schema: "pricing.v2",
+    updatedAt: rows.reduce((m, r) => (r.updated_at > m ? r.updated_at : m), ""),
+    globals: ctx.globals,
+    models: ctx.rows,
+  };
+}
+
+/** pricing.v1 wire for clients ≤ 0.6 (current base prices as ratios). */
+function wireV1(db) {
+  const ctx = loadPricing(db);
+  const today = new Date().toISOString().slice(0, 10);
+  const prefixes = [...new Set(ctx.rows.map((r) => r.modelPrefix))];
+  return {
+    schema: "pricing.v1",
+    updatedAt: "",
+    models: prefixes.map((p) => {
+      const r = core.findPrice(ctx.rows.filter((x) => x.modelPrefix === p), p, today);
+      const u = core.unitPrices(r, "base");
+      return {
+        modelPrefix: p,
+        inputPerM: u.input,
+        outputPerM: u.output,
+        cacheReadRatio: u.input ? u.cachedInput / u.input : 0,
+        cacheCreateRatio: u.input ? u.cacheWriteShort / u.input : 0,
+      };
+    }),
+  };
 }
 
 module.exports = {
   loadPricing,
   invalidate,
-  getPricing,
-  computeCost,
+  costOfRow,
+  isPriced,
   unpricedModels,
-  isUnpriced,
   listPricing,
+  listGlobals,
   upsertPricing,
   deletePricing,
-  round,
+  setGlobal,
+  wireV1,
+  wireV2,
+  round: core.round,
+  core,
 };
