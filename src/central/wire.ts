@@ -1,38 +1,47 @@
 /**
- * Wires the UsagePusher into the extension host. Everything here is additive and
- * gated behind `tokenscope.central.enabled` — disabled = zero overhead.
- * Runs in the background; does NOT touch the local reader/aggregator/webview.
+ * Wires the usage.v2 pusher into the extension host. Additive and gated behind
+ * `tokenscope.central.enabled` â€” disabled = zero overhead.
+ *
+ * The pusher owns a UsageStore whose window is the last `backfillDays` days
+ * (default 30). On the first run every bucket in that window is new to the push
+ * state, so the window IS the backfill; afterwards only changed buckets go out.
  */
 import * as vscode from "vscode";
 import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import { CLAUDE_HOME, CODEX_HOME } from "../pricing";
-import { readIdentity, authFileMtimes } from "../readers/identity";
+import { readIdentity } from "../readers/identity";
 import { ProjectMap } from "../identity/projectMap";
-import { CursorStore } from "./cursor";
-import { BuildCtx } from "./deltas";
+import { UsageStore } from "../core/usageStore";
+import { isoDaysAgo } from "../util";
+import { currentAuth } from "./buckets";
 import { tick, PushConfig } from "./pusher";
 import { syncPricing } from "./pricingSync";
 
 let timer: NodeJS.Timeout | undefined;
 let authWatchers: fs.FSWatcher[] = [];
 let ticking = false;
-let activeStore: CursorStore | undefined; // current store for the pushNow command
+let store: UsageStore | undefined;
+let ctxRef: vscode.ExtensionContext | undefined;
 
 function cfg() {
   return vscode.workspace.getConfiguration("tokenscope");
 }
 
-function pushConfig(): PushConfig | null {
+function owner(): string {
+  return cfg().get<string>("owner", "").trim();
+}
+
+function pushConfig(context: vscode.ExtensionContext): PushConfig | null {
   const url = cfg().get<string>("central.url", "").trim();
   if (!url) return null;
-  const owner = cfg().get<string>("owner", "").trim();
   return {
     url,
     ingestKey: cfg().get<string>("central.ingestKey", "").trim(),
-    osUser: owner || process.env.USERNAME || safeUser(),
+    osUser: owner() || process.env.USERNAME || safeUser(),
     hostname: os.hostname(),
+    clientVersion: String(context.extension?.packageJSON?.version ?? ""),
   };
 }
 
@@ -44,6 +53,11 @@ function safeUser(): string {
   }
 }
 
+function backfillDays(): number {
+  const n = cfg().get<number>("central.backfillDays", 30);
+  return Math.min(Math.max(Math.floor(n), 0), 90);
+}
+
 /** Pull central prices and, if they changed, refresh the local dashboard. */
 async function runPricingSync(context: vscode.ExtensionContext): Promise<void> {
   const url = cfg().get<string>("central.url", "").trim();
@@ -51,8 +65,6 @@ async function runPricingSync(context: vscode.ExtensionContext): Promise<void> {
   const ingestKey = cfg().get<string>("central.ingestKey", "").trim();
   const changed = await syncPricing(context, { url, ingestKey });
   if (changed) {
-    // tokenscope.refresh (registered in extension.ts) rebuilds + rebroadcasts
-    // state so recomputed costs show immediately. Ignore if unavailable.
     try {
       await vscode.commands.executeCommand("tokenscope.refresh");
     } catch {
@@ -61,23 +73,30 @@ async function runPricingSync(context: vscode.ExtensionContext): Promise<void> {
   }
 }
 
-function buildCtx(): BuildCtx {
-  return {
-    identity: readIdentity(),
-    projectMap: cfg().get<ProjectMap>("projectMap", {}),
-    authMtimes: authFileMtimes(),
-  };
-}
-
 /** Single-flight tick: skip if one is already running (watch + timer overlap). */
-async function runTick(store: CursorStore): Promise<void> {
-  if (ticking) return;
-  const conf = pushConfig();
+async function runTick(context: vscode.ExtensionContext): Promise<void> {
+  if (ticking || !store) return;
+  const conf = pushConfig(context);
   if (!conf) return;
   ticking = true;
   try {
-    const r = await tick(store, buildCtx(), conf);
-    if (r.error) console.warn("tokenscope central push:", r.error, r);
+    const windowStart = isoDaysAgo(backfillDays());
+    store.refresh(windowStart);
+    const id = readIdentity();
+    const r = await tick(
+      context.globalState,
+      {
+        entries: store.entries(),
+        windowStart,
+        authNow: {
+          claude: currentAuth("claude", id, owner(), conf.hostname),
+          codex: currentAuth("codex", id, owner(), conf.hostname),
+        },
+        projectMap: cfg().get<ProjectMap>("projectMap", {}),
+      },
+      conf,
+    );
+    if (r.error || r.secretDropped) console.warn("tokenscope central push:", r);
   } catch (e) {
     console.error("tokenscope central tick failed", e);
   } finally {
@@ -86,10 +105,7 @@ async function runTick(store: CursorStore): Promise<void> {
 }
 
 function watchAuthFiles(onChange: () => void): void {
-  const files = [
-    path.join(CLAUDE_HOME, ".credentials.json"),
-    path.join(CODEX_HOME, "auth.json"),
-  ];
+  const files = [path.join(CLAUDE_HOME, ".credentials.json"), path.join(CODEX_HOME, "auth.json")];
   for (const f of files) {
     try {
       // Watch the directory so we still fire if the file is atomically replaced.
@@ -105,13 +121,13 @@ function watchAuthFiles(onChange: () => void): void {
 
 let commandRegistered = false;
 
-/** Register the manual push command ONCE (survives re-wiring on config change). */
+/** Register the manual commands ONCE (survives re-wiring on config change). */
 export function registerCentralCommands(context: vscode.ExtensionContext): void {
   if (commandRegistered) return;
   commandRegistered = true;
   context.subscriptions.push(
     vscode.commands.registerCommand("tokenscope.central.pushNow", () => {
-      if (activeStore) void runTick(activeStore);
+      if (ctxRef) void runTick(ctxRef);
     }),
     vscode.commands.registerCommand("tokenscope.central.syncPricing", () => {
       void runPricingSync(context);
@@ -121,35 +137,29 @@ export function registerCentralCommands(context: vscode.ExtensionContext): void 
 
 export function activateCentral(context: vscode.ExtensionContext): void {
   registerCentralCommands(context);
+  // v1 delta cursors are obsolete (usage.v2 pushes snapshots) â€” free the space.
+  void context.globalState.update("tokenscope.central.cursors.v1", undefined);
 
-  const enabled = cfg().get<boolean>("central.enabled", false);
-  if (!enabled) {
-    activeStore = undefined;
+  if (!cfg().get<boolean>("central.enabled", false)) {
+    store = undefined;
+    ctxRef = undefined;
     return;
   }
+  store = new UsageStore(CLAUDE_HOME, CODEX_HOME);
+  ctxRef = context;
 
-  const store = new CursorStore(context.globalState);
-  activeStore = store;
+  // Login switch â†’ tick promptly so the new identity stamps new requests.
+  watchAuthFiles(() => void runTick(context));
 
-  // (a) file watcher in extension.ts fires on JSONL changes; the fallback timer
-  //     below plus pushNow keep pushes flowing without duplicating that watch.
-  // (b) auth file change → readIdentity() re-reads by mtime; also tick promptly
-  //     so a login switch is reflected in the next delta's auth.
-  watchAuthFiles(() => void runTick(store));
-
-  // (c) fallback interval — also piggyback a pricing sync so local prices track
-  //     the central admin table without a separate timer.
-  const min = Math.max(cfg().get<number>("central.pushIntervalMin", 15), 1);
+  const min = Math.max(cfg().get<number>("central.pushIntervalMin", 1), 1);
   timer = setInterval(() => {
-    void runTick(store);
+    void runTick(context);
     void runPricingSync(context);
   }, min * 60_000);
 
-  // Kick one tick soon after startup (seeds cursors at end-of-file; no backfill),
-  // and pull prices once so the dashboard reflects central pricing promptly.
+  // First tick soon after startup (this is when the backfill window is sent).
   setTimeout(() => {
-    void runTick(store);
-    void runPricingSync(context);
+    void runPricingSync(context).then(() => runTick(context));
   }, 5_000);
 }
 

@@ -1,181 +1,178 @@
 /**
- * Gates, sanitizes, and POSTs usage deltas to the central server; advances the
- * cursor only on a 2xx (see improve/09 §E.2). Best-effort: network failure keeps
- * the cursor untouched so the same deltas retry next tick — never blocks the UI.
+ * Pushes usage.v2 bucket snapshots to the central server (see buckets.ts).
  *
- * Gate (08 §6): push only apikey + confirmed. OAuth/chatgpt → drop (cursor still
- * advances, delta is "handled"). uncertain → hold: do NOT advance the cursor, so
- * the delta is re-evaluated once auth settles.
+ *  - Every account type is pushed: API key, Claude subscription/Teams (OAuth),
+ *    ChatGPT. The server decides what to price (API key only) — the client no
+ *    longer drops subscription usage.
+ *  - Only buckets whose content changed since the last successful push are sent,
+ *    in batches; a batch's push state is saved only after a 2xx.
+ *  - A bucket that existed before but has no requests now (e.g. a request was
+ *    re-attributed to the session it was copied from) is sent with zero totals.
+ *  - Secret scan uses specific key/token patterns and drops only the offending
+ *    bucket. The old catch-all /[A-Za-z0-9_-]{40,}/ matched long repo names
+ *    and blocked the whole machine forever.
  */
-import { CursorStore } from "./cursor";
-import { Delta, BuildCtx, collectClaudeDeltas, collectCodexDeltas } from "./deltas";
+import { Entry } from "../core/usageStore";
+import {
+  Bucket,
+  StampMap,
+  AuthInfo,
+  buildBuckets,
+  bucketHash,
+  bucketKey,
+  updateStamps,
+  pruneStamps,
+} from "./buckets";
+import { ProjectMap } from "../identity/projectMap";
 
-// Catch a full key/token before it ever leaves the machine.
-const SECRET_RE = /sk-ant-|sk-proj-[A-Za-z0-9]{20,}|[A-Za-z0-9_-]{40,}/;
+/** Full keys/tokens — never a path, a uuid or a long project name. */
+export const SECRET_RE = /sk-ant-[A-Za-z0-9_-]{8,}|sk-proj-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{40,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./;
+
+export const SCHEMA = "usage.v2";
+export const BATCH_SIZE = 500;
 
 export interface PushConfig {
   url: string;
   ingestKey: string;
   osUser: string;
   hostname: string;
+  clientVersion?: string;
 }
 
-export type Decision = "push" | "drop" | "hold";
-
-// TEMP (testing only): also push oauth/chatgpt usage so the dashboard has data
-// even without an apikey login. Revert to `false` before shipping — production
-// must push apikey deltas ONLY (08 §6). No secret is exposed either way; oauth
-// deltas simply carry no keyHash. Only the live tick() path reads this; decide()
-// keeps its production default so the gate tests stay meaningful.
-const TEMP_PUSH_NON_APIKEY = false;
-
-/** Pure gate: what to do with a delta. `pushNonApikey` is TEMP test wiring. */
-export function decide(d: Delta, pushNonApikey = false): Decision {
-  if (d.auth.confidence === "uncertain") return "hold";
-  // "unknown" is almost always transient — the credentials file was mid-rewrite
-  // during an OAuth token refresh, so readIdentity() briefly saw no auth. HOLD
-  // (do NOT advance the cursor) so the delta is re-evaluated next tick once auth
-  // settles, instead of being dropped + skipped forever. A genuinely credential-
-  // less machine just re-collects each tick (cheap) and never pushes.
-  if (d.auth.authType === "unknown") return "hold";
-  if (d.auth.authType === "apikey") return "push";
-  if (pushNonApikey) return "push"; // TEMP: also push oauth/chatgpt
-  return "drop"; // production: oauth / chatgpt
+/** Persisted pusher state (globalState). */
+export interface PushState {
+  /** bucketKey → last successfully pushed bucket + its hash. */
+  pushed: Record<string, { hash: string; bucket: Bucket }>;
+  stamps: StampMap;
 }
 
-/** Strip to the wire fields only (08 §4.1) — drops internal _* helpers. */
-export function toWire(d: Delta) {
-  return {
-    sessionId: d.sessionId,
-    tool: d.tool,
-    seq: d.seq,
-    eventTsFrom: d.eventTsFrom,
-    eventTsTo: d.eventTsTo,
-    date: d.date,
-    auth: {
-      authType: d.auth.authType,
-      keyHash: d.auth.keyHash,
-      orgShort: d.auth.orgShort,
-      confidence: d.auth.confidence,
-    },
-    project: d.project,
-    repo: d.repo,
-    model: d.model,
-    tokens: d.tokens,
-    costEstimate: d.costEstimate,
-  };
+export interface KeyValueStore {
+  get<T>(key: string, def: T): T;
+  update(key: string, value: unknown): Thenable<void> | Promise<void>;
 }
 
-export interface PlanResult {
-  toPush: Delta[];
-  toDropAdvance: Delta[]; // drop but advance cursor (handled)
-  held: Delta[]; // uncertain — do not advance
+const STATE_KEY = "tokenscope.central.v2";
+
+export function loadState(kv: KeyValueStore): PushState {
+  const s = kv.get<PushState | null>(STATE_KEY, null);
+  return s && typeof s === "object" ? { pushed: s.pushed || {}, stamps: s.stamps || {} } : { pushed: {}, stamps: {} };
 }
 
-/** Split deltas by decision (pure). `pushNonApikey` is TEMP test wiring. */
-export function plan(deltas: Delta[], pushNonApikey = false): PlanResult {
-  const r: PlanResult = { toPush: [], toDropAdvance: [], held: [] };
-  for (const d of deltas) {
-    const dec = decide(d, pushNonApikey);
-    if (dec === "push") r.toPush.push(d);
-    else if (dec === "drop") r.toDropAdvance.push(d);
-    else r.held.push(d);
-  }
-  return r;
-}
-
-/** Advance the cursor for a processed delta (pushed-ok or dropped). */
-export function advanceCursor(store: CursorStore, d: Delta): void {
-  const prev = store.get(d.tool, d.sessionId);
-  const tokens = d.tokens.input + d.tokens.output + d.tokens.cacheRead + d.tokens.cacheWrite;
-  store.set({
-    tool: d.tool,
-    sessionId: d.sessionId,
-    lastByteOffset: d._nextByteOffset ?? prev?.lastByteOffset,
-    lastCommittedTotal: d._nextCommittedTotal ?? prev?.lastCommittedTotal,
-    lastCommittedInput: d._nextCommittedInput ?? prev?.lastCommittedInput,
-    lastCommittedOutput: d._nextCommittedOutput ?? prev?.lastCommittedOutput,
-    lastCommittedCached: d._nextCommittedCached ?? prev?.lastCommittedCached,
-    lastSeq: d.seq,
-    cumTokens: (prev?.cumTokens ?? 0) + tokens,
-    lastAuthMtime: d._authMtime,
-    lastMsgKey: d._nextMsgKey ?? prev?.lastMsgKey,
-  });
+export function saveState(kv: KeyValueStore, s: PushState): Thenable<void> | Promise<void> {
+  return kv.update(STATE_KEY, s);
 }
 
 export interface Poster {
   (url: string, headers: Record<string, string>, body: string): Promise<{ ok: boolean; status: number }>;
 }
 
-/** Default poster using global fetch (Node 18+). */
 export const fetchPoster: Poster = async (url, headers, body) => {
   const res = await fetch(url, { method: "POST", headers, body });
   return { ok: res.ok, status: res.status };
 };
 
-/**
- * One tick: collect → gate → (sanitize) → POST → advance cursor on 2xx.
- * Returns a small summary for logging. Never throws on network error.
- */
-export interface Collector {
-  (store: CursorStore, ctx: BuildCtx): Delta[];
+export interface TickInput {
+  entries: Entry[];
+  windowStart: string;
+  authNow: { claude: AuthInfo | null; codex: AuthInfo | null };
+  projectMap: ProjectMap;
+  nowIso?: string;
 }
 
-const defaultCollect: Collector = (store, ctx) => [
-  ...collectClaudeDeltas(store, ctx),
-  ...collectCodexDeltas(store, ctx),
-];
+export interface TickResult {
+  pushed: number;
+  unchanged: number;
+  held: number;
+  secretDropped: number;
+  error?: string;
+}
 
+/** The buckets that must be sent: changed ones plus zeroed tombstones. Pure. */
+export function planPush(state: PushState, buckets: Bucket[], windowStart: string): { send: Bucket[]; unchanged: number } {
+  const send: Bucket[] = [];
+  let unchanged = 0;
+  const live = new Set<string>();
+  for (const b of buckets) {
+    const k = bucketKey(b);
+    live.add(k);
+    const prev = state.pushed[k];
+    if (prev && prev.hash === bucketHash(b)) unchanged++;
+    else send.push(b);
+  }
+  for (const [k, p] of Object.entries(state.pushed)) {
+    if (live.has(k)) continue;
+    if (p.bucket.date < windowStart) continue; // just aged out of the window — keep server value
+    if (p.bucket.requests === 0) continue; // already zeroed
+    send.push({
+      ...p.bucket,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, webSearch: 0 },
+      requests: 0,
+    });
+  }
+  return { send, unchanged };
+}
+
+/** One tick: stamp → bucket → diff → POST in batches → save state per successful batch. */
 export async function tick(
-  store: CursorStore,
-  ctx: BuildCtx,
+  kv: KeyValueStore,
+  input: TickInput,
   cfg: PushConfig,
   post: Poster = fetchPoster,
-  collect: Collector = defaultCollect,
-  pushNonApikey = TEMP_PUSH_NON_APIKEY, // TEMP: default carries the flag; tests can force production gate
-): Promise<{ pushed: number; dropped: number; held: number; error?: string }> {
-  const deltas = collect(store, ctx);
-  const { toPush, toDropAdvance, held } = plan(deltas, pushNonApikey);
+): Promise<TickResult> {
+  const state = loadState(kv);
+  const nowIso = input.nowIso ?? new Date().toISOString();
+  updateStamps(state.stamps, input.entries, input.authNow, nowIso);
+  pruneStamps(state.stamps, input.entries);
 
-  // Dropped deltas are handled → advance immediately (even if network is down).
-  for (const d of toDropAdvance) advanceCursor(store, d);
+  const buckets = buildBuckets(input.entries, { stamps: state.stamps, projectMap: input.projectMap });
+  const stamped = new Set(Object.keys(state.stamps));
+  const held = new Set(
+    input.entries.filter((e) => !stamped.has(`${e.rec.tool}:${e.file.sessionId}`)).map((e) => `${e.rec.tool}:${e.file.sessionId}`),
+  ).size;
 
-  if (!toPush.length) {
-    await store.flush();
-    return { pushed: 0, dropped: toDropAdvance.length, held: held.length };
-  }
-
-  const wire = toPush.map(toWire);
-  const payload = {
-    schema: "usage.v1",
-    reportedAt: new Date().toISOString(),
-    machine: { osUser: cfg.osUser, hostname: cfg.hostname },
-    deltas: wire,
-  };
-  const body = JSON.stringify(payload);
-
-  // Sanitize: never send a payload that looks like it carries a raw secret.
-  if (SECRET_RE.test(JSON.stringify(wire))) {
-    await store.flush(); // persist the drop-advances above
-    return { pushed: 0, dropped: toDropAdvance.length, held: held.length, error: "secret_in_payload" };
-  }
-
-  try {
-    const res = await post(
-      cfg.url.replace(/\/$/, "") + "/api/v1/usage",
-      { "content-type": "application/json", "x-ingest-key": cfg.ingestKey },
-      body,
-    );
-    if (res.ok) {
-      for (const d of toPush) advanceCursor(store, d);
-      await store.flush();
-      return { pushed: toPush.length, dropped: toDropAdvance.length, held: held.length };
+  const { send, unchanged } = planPush(state, buckets, input.windowStart);
+  const clean: Bucket[] = [];
+  let secretDropped = 0;
+  for (const b of send) {
+    if (SECRET_RE.test(JSON.stringify(b))) {
+      secretDropped++;
+      console.warn("tokenscope central: bucket dropped (looks like it carries a secret)", b.tool, b.sessionId, b.date);
+    } else {
+      clean.push(b);
     }
-    // Non-2xx: keep push cursors put; retry next tick. Drop-advances already saved.
-    await store.flush();
-    return { pushed: 0, dropped: toDropAdvance.length, held: held.length, error: `http_${res.status}` };
-  } catch (e: any) {
-    await store.flush();
-    return { pushed: 0, dropped: toDropAdvance.length, held: held.length, error: `net_${e?.code || "err"}` };
   }
+
+  // Drop push-state entries that aged out of the window (keeps the state small).
+  for (const [k, p] of Object.entries(state.pushed)) if (p.bucket.date < input.windowStart) delete state.pushed[k];
+
+  let pushed = 0;
+  for (let i = 0; i < clean.length; i += BATCH_SIZE) {
+    const batch = clean.slice(i, i + BATCH_SIZE);
+    const body = JSON.stringify({
+      schema: SCHEMA,
+      reportedAt: nowIso,
+      machine: { osUser: cfg.osUser, hostname: cfg.hostname },
+      client: { version: cfg.clientVersion || "" },
+      buckets: batch,
+    });
+    let res: { ok: boolean; status: number };
+    try {
+      res = await post(cfg.url.replace(/\/$/, "") + "/api/v1/usage", {
+        "content-type": "application/json",
+        "x-ingest-key": cfg.ingestKey,
+      }, body);
+    } catch (e: any) {
+      await saveState(kv, state);
+      return { pushed, unchanged, held, secretDropped, error: `net_${e?.code || "err"}` };
+    }
+    if (!res.ok) {
+      await saveState(kv, state);
+      return { pushed, unchanged, held, secretDropped, error: `http_${res.status}` };
+    }
+    for (const b of batch) state.pushed[bucketKey(b)] = { hash: bucketHash(b), bucket: b };
+    pushed += batch.length;
+    await saveState(kv, state);
+  }
+  await saveState(kv, state);
+  return { pushed, unchanged, held, secretDropped };
 }

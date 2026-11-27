@@ -109,3 +109,45 @@ test("resolveProject: falls back to keyHash", () => {
 test("resolveProject: fallback to basename", () => {
   assert.equal(resolveProject("d:/Work/Projects/MyRepo", undefined, {}), "myrepo");
 });
+
+// ---------------------------------------------------------------------------
+// 0.7: subscription account identity, settings-file keys, ChatGPT claims
+// ---------------------------------------------------------------------------
+test("claude: oauth carries the logged-in account (uuid, email, name) from ~/.claude.json", () => {
+  const id = deriveClaude(
+    {},
+    { claudeAiOauth: { subscriptionType: "team", accessToken: FAKE_ANTHROPIC_TOKEN, refreshToken: FAKE_ANTHROPIC_TOKEN } },
+    { accountUuid: "11111111-2222-3333-4444-555555555555", emailAddress: "dev1@example.com", displayName: "Dev One", organizationUuid: "a1b2c3d4-5678-90ab-cdef-1234567890ab", seatTier: "standard" },
+  );
+  assert.equal(id.authType, "oauth");
+  assert.equal(id.accountUuid, "11111111-2222-3333-4444-555555555555");
+  assert.equal(id.email, "dev1@example.com");
+  assert.equal(id.displayName, "Dev One");
+  assert.equal(id.orgShort, "a1b2c3d4");
+  assert.ok(!JSON.stringify(id).includes("sk-ant-"), "tokens never copied");
+});
+
+test("claude: API key set in ~/.claude/settings.json env counts as apikey (VS Code env may lack it)", () => {
+  const id = deriveClaude({}, { claudeAiOauth: { subscriptionType: "max" } }, null, { env: { ANTHROPIC_API_KEY: FAKE_ANTHROPIC_TOKEN } });
+  assert.equal(id.authType, "apikey");
+  assert.equal(id.keySource, "settings");
+  assert.equal(id.keyHash!.length, 8);
+  assertNoSecret(id);
+});
+
+test("claude: apiKeyHelper counts as apikey, hashed by command", () => {
+  const id = deriveClaude({}, null, null, { apiKeyHelper: "~/bin/get-key.sh" });
+  assert.equal(id.authType, "apikey");
+  assert.equal(id.keySource, "helper");
+});
+
+test("codex: chatgpt login exposes account id, email and plan from id_token claims only", () => {
+  const claims = { email: "dev1@example.com", "https://api.openai.com/auth": { chatgpt_plan_type: "business", chatgpt_account_id: "acc-1" } };
+  const jwt = "eyJhbGciOiJub25lIn0." + Buffer.from(JSON.stringify(claims)).toString("base64url") + ".sig";
+  const id = deriveCodex({ auth_mode: "chatgpt", tokens: { id_token: jwt, access_token: "secret-access" } });
+  assert.equal(id.authType, "chatgpt");
+  assert.equal(id.email, "dev1@example.com");
+  assert.equal(id.plan, "business");
+  assert.equal(id.accountId, "acc-1");
+  assert.ok(!JSON.stringify(id).includes("secret-access"));
+});
