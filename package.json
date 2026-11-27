@@ -2,7 +2,7 @@
   "name": "codetokens-monitor",
   "displayName": "CodeTokens Monitor",
   "description": "Live token usage and cost dashboard for AI coding assistants, shown natively in a VS Code panel.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "toomo",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -106,7 +106,7 @@
         "tokenscope.central.enabled": {
           "type": "boolean",
           "default": false,
-          "description": "Push aggregated usage (apikey only) to a central internal server. Local dashboard is unaffected. See server/README.md."
+          "description": "Push usage to a central internal server: token totals per session/day/model for every account type (API key, Claude subscription/Teams, ChatGPT), with the account email/uuid for subscription logins. The server prices API-key usage only. Local dashboard is unaffected. See server/README.md."
         },
         "tokenscope.central.url": {
           "type": "string",
@@ -122,12 +122,19 @@
           "type": "number",
           "default": 1,
           "minimum": 1,
-          "description": "Fallback push interval (minutes) if file-watch misses an event. Auth is captured per-delta at read time."
+          "description": "Push interval (minutes). Only buckets whose totals changed since the last successful push are sent."
+        },
+        "tokenscope.central.backfillDays": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "maximum": 90,
+          "description": "Days of past usage kept in sync with the central server. On first run (or after upgrading to 0.7) the whole window is sent; afterwards only changes."
         },
         "tokenscope.owner": {
           "type": "string",
           "default": "",
-          "description": "Optional override for the reported member identity. Empty = OS user + org."
+          "description": "Member identity for API-key usage (recommended: your company email). Subscription logins are identified by their Claude/ChatGPT account automatically. Empty = OS user @ hostname."
         },
         "tokenscope.projectMap": {
           "type": "object",
@@ -141,7 +148,7 @@
     "compile": "node esbuild.js",
     "test": "node test.js",
     "watch": "node esbuild.js --watch",
-    "package": "node esbuild.js --production && vsce package --allow-missing-repository -o codetokens-monitor-0.5.0.vsix",
+    "package": "node esbuild.js --production && vsce package --allow-missing-repository -o codetokens-monitor-0.7.0.vsix",
     "vscode:prepublish": "node esbuild.js --production"
   },
   "devDependencies": {
