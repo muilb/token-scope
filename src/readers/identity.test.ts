@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deriveClaude, deriveCodex } from "./identity";
+import { deriveClaude, deriveClaudeForCwd, deriveCodex } from "./identity";
+import { classifyHelper } from "./apiKeyHelper";
 import { resolveProject } from "../identity/projectMap";
 
 // A real-looking secret we must never see leak into derived output.
@@ -135,10 +136,21 @@ test("claude: API key set in ~/.claude/settings.json env counts as apikey (VS Co
   assertNoSecret(id);
 });
 
-test("claude: apiKeyHelper counts as apikey, hashed by command", () => {
-  const id = deriveClaude({}, null, null, { apiKeyHelper: "~/bin/get-key.sh" });
-  assert.equal(id.authType, "apikey");
-  assert.equal(id.keySource, "helper");
+test("claude: apiKeyHelper is not judged globally — deriveClaude ignores it (resolved per project)", () => {
+  const id = deriveClaude({}, { claudeAiOauth: { subscriptionType: "max" } }, null, { apiKeyHelper: "~/bin/get-key.sh" });
+  assert.equal(id.authType, "oauth");
+});
+
+test("claude: two projects with two helper vars bill to two keys", () => {
+  const env = { "PA-ANTHROPIC_API_KEY": "sk-ant-api03-FAKE-A-000000000000", "PB-ANTHROPIC_API_KEY": "sk-ant-api03-FAKE-B-000000000000" };
+  const cred = { claudeAiOauth: { subscriptionType: "max" } };
+  const a = deriveClaudeForCwd(env, cred, classifyHelper({ cmd: "printenv PA-ANTHROPIC_API_KEY", mtime: 1 }, env));
+  const b = deriveClaudeForCwd(env, cred, classifyHelper({ cmd: "printenv PB-ANTHROPIC_API_KEY", mtime: 1 }, env));
+  assert.equal(a.authType, "apikey");
+  assert.equal(b.authType, "apikey");
+  assert.notEqual(a.keyHash, b.keyHash);
+  assertNoSecret(a);
+  assertNoSecret(b);
 });
 
 test("codex: chatgpt login exposes account id, email and plan from id_token claims only", () => {

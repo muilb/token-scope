@@ -1,6 +1,32 @@
 # Changelog
 
-## 0.7.0
+## 0.8.0
+
+0.7.0 was an internal build that only added per-project `apiKeyHelper`
+attribution; 0.8.0 merges it with the usage.v2 rework below.
+
+### Fixed — usage from `apiKeyHelper` projects was silently dropped
+- **Per-project API key attribution** (`src/readers/apiKeyHelper.ts`): Claude Code's
+  `apiKeyHelper` setting runs a command to fetch the key, so the key never reaches
+  `ANTHROPIC_API_KEY`. The identity reader saw no env key, fell back to the OAuth
+  credential file, and every delta was classified `oauth` → **dropped** (cursor
+  advancing, tokens lost). The helper's *command string* is now parsed for the env
+  var it names; that var is read and hashed, giving the same `keyHash` the machine
+  produced back when the key was exported directly — so history stays continuous.
+  Projects using different key vars are now attributed to different keys, which the
+  single global env var could never express.
+  - The helper command is **parsed, never executed** — a settings file can be shared
+    or committed, so running it would be arbitrary code execution from config.
+  - `"apiKeyHelper": ""` is read as an explicit "this project runs on the
+    subscription" and resolves to `oauth` (with the account's email + uuid).
+  - A helper that names an env var which is not set resolves to `unknown` and is
+    **held** — a misconfigured helper delays data instead of losing it.
+  - A helper that names no env var at all (a script, a vault call) is billed as
+    `apikey`, keyed by a hash of the command string, so it is never held forever.
+  - Env-key precedence is unchanged: a machine exporting `ANTHROPIC_API_KEY` /
+    `ANTHROPIC_AUTH_TOKEN` behaves exactly as in 0.6.0.
+  - Switching a project's helper mid-session now adds a new auth stamp for that
+    session, same as an OAuth login switch does.
 
 ### Fixed — local dashboard counts and prices
 - **Subagent usage was not counted.** Transcripts under

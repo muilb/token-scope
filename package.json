@@ -2,7 +2,7 @@
   "name": "codetokens-monitor",
   "displayName": "CodeTokens Monitor",
   "description": "Live token usage and cost dashboard for AI coding assistants, shown natively in a VS Code panel.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "toomo",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -129,7 +129,7 @@
           "default": 30,
           "minimum": 0,
           "maximum": 90,
-          "description": "Days of past usage kept in sync with the central server. On first run (or after upgrading to 0.7) the whole window is sent; afterwards only changes."
+          "description": "Days of past usage kept in sync with the central server. On first run (or after upgrading to 0.8) the whole window is sent; afterwards only changes."
         },
         "tokenscope.owner": {
           "type": "string",
@@ -148,7 +148,7 @@
     "compile": "node esbuild.js",
     "test": "node test.js",
     "watch": "node esbuild.js --watch",
-    "package": "node esbuild.js --production && vsce package --allow-missing-repository -o codetokens-monitor-0.7.0.vsix",
+    "package": "node esbuild.js --production && vsce package --allow-missing-repository -o codetokens-monitor-0.8.0.vsix",
     "vscode:prepublish": "node esbuild.js --production"
   },
   "devDependencies": {

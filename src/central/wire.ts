@@ -1,6 +1,6 @@
 /**
  * Wires the usage.v2 pusher into the extension host. Additive and gated behind
- * `tokenscope.central.enabled` â€” disabled = zero overhead.
+ * `tokenscope.central.enabled` — disabled = zero overhead.
  *
  * The pusher owns a UsageStore whose window is the last `backfillDays` days
  * (default 30). On the first run every bucket in that window is new to the push
@@ -11,11 +11,11 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import { CLAUDE_HOME, CODEX_HOME } from "../pricing";
-import { readIdentity } from "../readers/identity";
+import { readIdentity, claudeIdentityForCwd } from "../readers/identity";
 import { ProjectMap } from "../identity/projectMap";
 import { UsageStore } from "../core/usageStore";
 import { isoDaysAgo } from "../util";
-import { currentAuth } from "./buckets";
+import { currentAuth, AuthInfo, AuthResolver } from "./buckets";
 import { tick, PushConfig } from "./pusher";
 import { syncPricing } from "./pricingSync";
 
@@ -83,15 +83,22 @@ async function runTick(context: vscode.ExtensionContext): Promise<void> {
     const windowStart = isoDaysAgo(backfillDays());
     store.refresh(windowStart);
     const id = readIdentity();
+    const who = owner();
+    // Claude auth is per project (apiKeyHelper may pick a different key per repo).
+    const claudeByCwd = new Map<string, AuthInfo | null>();
+    const authFor: AuthResolver = (tool, cwd) => {
+      if (tool === "codex") return currentAuth("codex", id, who, conf.hostname);
+      if (!claudeByCwd.has(cwd)) {
+        claudeByCwd.set(cwd, currentAuth("claude", { ...id, claude: claudeIdentityForCwd(cwd) }, who, conf.hostname));
+      }
+      return claudeByCwd.get(cwd) ?? null;
+    };
     const r = await tick(
       context.globalState,
       {
         entries: store.entries(),
         windowStart,
-        authNow: {
-          claude: currentAuth("claude", id, owner(), conf.hostname),
-          codex: currentAuth("codex", id, owner(), conf.hostname),
-        },
+        authFor,
         projectMap: cfg().get<ProjectMap>("projectMap", {}),
       },
       conf,
@@ -137,7 +144,7 @@ export function registerCentralCommands(context: vscode.ExtensionContext): void 
 
 export function activateCentral(context: vscode.ExtensionContext): void {
   registerCentralCommands(context);
-  // v1 delta cursors are obsolete (usage.v2 pushes snapshots) â€” free the space.
+  // v1 delta cursors are obsolete (usage.v2 pushes snapshots) — free the space.
   void context.globalState.update("tokenscope.central.cursors.v1", undefined);
 
   if (!cfg().get<boolean>("central.enabled", false)) {

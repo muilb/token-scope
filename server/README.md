@@ -37,9 +37,44 @@ key nào trong ba key này — họ dùng link team (`/team?k=…`).
 Mở dashboard lần đầu bằng `http://server:8787/?vk=<VIEW_KEY>`; trình duyệt nhớ bằng
 cookie, các lần sau không cần `?vk=`.
 
+### Chạy cùng Windows (Task Scheduler, không cần admin)
+
+Chạy `npm start` trong terminal hay background task của một phiên chat thì server
+**chết theo phiên đó** (đóng VS Code, reboot, phiên chat nghỉ…). Để nó tự sống:
+
+- `start-server.cmd` — launcher: `cd` vào thư mục server, log ra `data\server.log`
+  (xoay vòng khi >20 MB lúc khởi động), tự tìm `node`.
+- `start-server-hidden.vbs` — bọc `.cmd` để **không hiện cửa sổ console** khi đăng nhập.
+
+Đăng ký task (PowerShell, chạy dưới user thường):
+
+```powershell
+$dir = (Resolve-Path .\server).Path      # hoặc đường dẫn tuyệt đối tới server/
+$user = "$env:USERDOMAIN\$env:USERNAME"
+Register-ScheduledTask -TaskName 'TokenScope Central Server' `
+  -Action    (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "//B //Nologo `"$dir\start-server-hidden.vbs`"" -WorkingDirectory $dir) `
+  -Trigger   (New-ScheduledTaskTrigger -AtLogOn -User $user) `
+  -Principal (New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited) `
+  -Settings  (New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd)
+Start-ScheduledTask -TaskName 'TokenScope Central Server'
+```
+
+Lưu ý:
+- `-ExecutionTimeLimit 0` là **bắt buộc** — mặc định Task Scheduler giết task sau 72 giờ.
+- Trigger *At logon* (không phải *At startup*) vì user thường không được tạo task chạy
+  khi chưa đăng nhập (S4U bị *Access is denied*). Có admin thì đổi sang `-AtStartup` + `-LogonType S4U`.
+- Task ở trạng thái **Ready** ngay sau khi chạy (wscript khởi chạy xong là thoát; node chạy tách rời),
+  nên `Stop-ScheduledTask` **không** dừng được server. Dừng server:
+  ```powershell
+  Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object CommandLine -like '*server.js*' | ForEach-Object { Stop-Process -Id $_.ProcessId }
+  ```
+  Khởi động lại: `Start-ScheduledTask -TaskName 'TokenScope Central Server'`. Gọi khi server đang chạy
+  thì instance thứ 2 thoát ngay vì trùng cổng (ghi `server exited with code 1` vào log) — vô hại.
+- Gỡ: `Unregister-ScheduledTask -TaskName 'TokenScope Central Server' -Confirm:$false`.
+
 ## Dữ liệu nhận
 
-Từ 0.7 extension gửi **`usage.v2`**: tổng tuyệt đối theo *bucket*
+Từ 0.8 extension gửi **`usage.v2`**: tổng tuyệt đối theo *bucket*
 (member, máy, tool, session, ngày, model, speed, tier, geo, origin). Server **ghi đè**
 bucket theo khoá, nên gửi lại / backfill / client gửi trùng đều không cộng đôi.
 
@@ -58,7 +93,7 @@ bucket theo khoá, nên gửi lại / backfill / client gửi trùng đều khô
 | | |
 |---|---|
 | `POST /api/v1/usage` | nhận `usage.v2` (buckets) hoặc `usage.v1` (deltas). `X-Ingest-Key`. |
-| `GET /api/v1/pricing` | bảng giá cho extension: v1 mặc định (client cũ), `?schema=v2` cho 0.7+. `X-Ingest-Key`. |
+| `GET /api/v1/pricing` | bảng giá cho extension: v1 mặc định (client cũ), `?schema=v2` cho 0.8+. `X-Ingest-Key`. |
 | `GET /` · `GET /sessions` | dashboard member × dự án × ngày · theo session. `VIEW_KEY`. |
 | `GET /api/v1/summary[.csv]?groupBy=member\|project\|key\|plan` | JSON/CSV tổng hợp. `VIEW_KEY`. |
 | `GET /api/v1/breakdown.csv` · `/api/v1/sessions.csv` | CSV theo bảng. `VIEW_KEY`. |
@@ -103,7 +138,7 @@ Việt/Nhật; chỉ xuất tên thư mục ngắn, không xuất đường dẫ
 1. **Backup** `data/usage.db` (+ `-wal`, `-shm`, hoặc `PRAGMA wal_checkpoint` trước).
 2. Cập nhật code cả repo, `npm install`, khởi động lại với thêm `VIEW_KEY`.
    Schema mới + view + member + bảng giá v2 tự tạo; dữ liệu v1 giữ nguyên.
-3. Cài extension 0.7 cho member. Lần đẩy đầu gửi 30 ngày gần nhất.
+3. Cài extension 0.8 cho member. Lần đẩy đầu gửi 30 ngày gần nhất.
 4. Vào `/admin?tab=members` gộp các member trùng; tạo team ở `/admin?tab=teams`.
 
 Lưu ý dữ liệu v1 cũ: delta v1 gắn cả lô vào model **cuối** của lô, nên có token bị

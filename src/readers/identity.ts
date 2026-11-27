@@ -15,6 +15,7 @@ import * as os from "os";
 import * as path from "path";
 import * as crypto from "crypto";
 import { CLAUDE_HOME, CODEX_HOME } from "../pricing";
+import { HelperAuth, resolveHelperAuth, classifyHelper, findHelper } from "./apiKeyHelper";
 
 export interface ClaudeIdentity {
   authType: "oauth" | "apikey" | "unknown";
@@ -122,10 +123,7 @@ export function deriveClaude(
       keySource: envKey ? "env" : "settings",
     };
   }
-  if (settings && typeof settings.apiKeyHelper === "string" && settings.apiKeyHelper.trim()) {
-    // The key itself is produced at run time; hash the helper command as a stable id.
-    return { authType: "apikey", keyHash: shortHash(settings.apiKeyHelper.trim()), proxy: proxy || undefined, keySource: "helper" };
-  }
+  // apiKeyHelper is resolved per project by deriveClaudeForCwd (it may differ per repo).
 
   const orgId: string | undefined = str(cred?.organizationUuid) || str(account?.organizationUuid);
   const oauth = cred?.claudeAiOauth;
@@ -147,6 +145,38 @@ export function deriveClaude(
     };
   }
   return { authType: "unknown", orgId, orgShort: orgId ? orgId.slice(0, 8) : undefined };
+}
+
+/**
+ * Pure: Claude identity for one project directory, honouring the project's
+ * `apiKeyHelper` (see apiKeyHelper.ts). Precedence keeps the env path first so
+ * machines that export ANTHROPIC_API_KEY behave exactly as before:
+ *   1. env key / ~/.claude/settings.json env key → apikey (unchanged)
+ *   2. helper → readable env var  → apikey, hash of that var's value (same hash
+ *                                    as when the key was exported directly)
+ *   3. helper names nothing parseable (script, vault) → apikey, hash of the
+ *                                    command as a stable id (never held forever)
+ *   4. helper === ""               → the project runs on the subscription → oauth
+ *   5. no helper declared          → credential file (oauth / unknown)
+ *   6. helper names an unset var   → "unknown": the pusher HOLDS it, so a
+ *                                    misconfigured helper delays data, never loses it
+ */
+export function deriveClaudeForCwd(
+  env: NodeJS.ProcessEnv,
+  cred: any | null,
+  helper: HelperAuth,
+  account: any | null = null,
+  settings: any | null = null,
+): ClaudeIdentity {
+  const base = deriveClaude(env, cred, account, settings);
+  if (base.authType === "apikey") return base;
+  const sEnv = settings && typeof settings.env === "object" && settings.env ? settings.env : {};
+  const proxy = env.ANTHROPIC_BASE_URL || sEnv.ANTHROPIC_BASE_URL ? true : undefined;
+  if (helper.kind === "apikey" || helper.kind === "opaque") {
+    return { authType: "apikey", keyHash: helper.keyHash, proxy, keySource: "helper" };
+  }
+  if (helper.kind === "unresolved") return { authType: "unknown" };
+  return base; // "subscription" and "none" read the credential file
 }
 
 /** Decode the claims of a JWT without verifying it (identity hints only, never sent as-is). */
@@ -202,16 +232,29 @@ function readOauthAccount(): any | null {
   return j && typeof j.oauthAccount === "object" ? j.oauthAccount : null;
 }
 
+let _raw: { cred: any | null; account: any | null; settings: any | null } = { cred: null, account: null, settings: null };
+
 export function readIdentity(): AccountIdentity {
   const sig = [CLAUDE_CRED, CLAUDE_JSON, CLAUDE_SETTINGS, CODEX_AUTH].map(mtimeOf).join("|");
   if (_cache && sig === _sig) return _cache;
+  _raw = { cred: readJson(CLAUDE_CRED), account: readOauthAccount(), settings: readJson(CLAUDE_SETTINGS) };
   _cache = {
-    claude: deriveClaude(process.env, readJson(CLAUDE_CRED), readOauthAccount(), readJson(CLAUDE_SETTINGS)),
+    claude: deriveClaude(process.env, _raw.cred, _raw.account, _raw.settings),
     codex: deriveCodex(readJson(CODEX_AUTH)),
     osUser: osUser(),
   };
   _sig = sig;
   return _cache;
+}
+
+/**
+ * Live Claude identity for one session cwd, for the pusher: with apiKeyHelper,
+ * two sessions running at the same moment can bill to two different keys.
+ */
+export function claudeIdentityForCwd(cwd: string): ClaudeIdentity {
+  readIdentity(); // refresh the cached credential / account / settings files
+  const helper: HelperAuth = cwd ? resolveHelperAuth(cwd, process.env) : classifyHelper(findHelper(""), process.env);
+  return deriveClaudeForCwd(process.env, _raw.cred, helper, _raw.account, _raw.settings);
 }
 
 /** Testing hook: drop the cache so the next read re-parses the files. */

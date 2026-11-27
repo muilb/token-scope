@@ -16,7 +16,7 @@ import { Entry } from "../core/usageStore";
 import {
   Bucket,
   StampMap,
-  AuthInfo,
+  AuthResolver,
   buildBuckets,
   bucketHash,
   bucketKey,
@@ -74,7 +74,8 @@ export const fetchPoster: Poster = async (url, headers, body) => {
 export interface TickInput {
   entries: Entry[];
   windowStart: string;
-  authNow: { claude: AuthInfo | null; codex: AuthInfo | null };
+  /** Account each session bills to, by tool and project directory. */
+  authFor: AuthResolver;
   projectMap: ProjectMap;
   nowIso?: string;
 }
@@ -121,7 +122,7 @@ export async function tick(
 ): Promise<TickResult> {
   const state = loadState(kv);
   const nowIso = input.nowIso ?? new Date().toISOString();
-  updateStamps(state.stamps, input.entries, input.authNow, nowIso);
+  updateStamps(state.stamps, input.entries, input.authFor, nowIso);
   pruneStamps(state.stamps, input.entries);
 
   const buckets = buildBuckets(input.entries, { stamps: state.stamps, projectMap: input.projectMap });

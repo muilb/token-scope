@@ -102,29 +102,38 @@ export type StampMap = Record<string, AuthStamp[]>;
 const ASSUME_AFTER_MS = 15 * 60_000;
 
 /**
- * Make sure every session in `entries` has a stamp; append a new stamp when the
- * identity changed. Sessions of a tool whose identity is unknown get none (held).
+ * Account a session is billed to right now. Claude depends on the session's
+ * project directory: a project's `apiKeyHelper` can pick its own API key.
+ * null = unknown (the session is held).
  */
-export function updateStamps(
-  stamps: StampMap,
-  entries: Entry[],
-  authNow: { claude: AuthInfo | null; codex: AuthInfo | null },
-  nowIso: string,
-): boolean {
+export type AuthResolver = (tool: "claude" | "codex", cwd: string) => AuthInfo | null;
+
+/** Project directory of a log file (Claude: from the log, else the folder slug). */
+export function fileCwd(file: Entry["file"], tool: "claude" | "codex"): string {
+  return file.cwd || (tool === "claude" ? slugToCwd(file.slug) : "");
+}
+
+/**
+ * Make sure every session in `entries` has a stamp; append a new stamp when the
+ * identity changed. Sessions whose identity is unknown get none (held).
+ */
+export function updateStamps(stamps: StampMap, entries: Entry[], authFor: AuthResolver, nowIso: string): boolean {
   let changed = false;
   const firstTs = new Map<string, string>();
   const lastTs = new Map<string, string>();
+  const cwdOf = new Map<string, string>();
   for (const { rec, file } of entries) {
     const k = `${rec.tool}:${file.sessionId}`;
     const f = firstTs.get(k);
     if (!f || rec.ts < f) firstTs.set(k, rec.ts);
     const l = lastTs.get(k);
     if (!l || rec.ts > l) lastTs.set(k, rec.ts);
+    if (!cwdOf.get(k)) cwdOf.set(k, fileCwd(file, rec.tool));
   }
   const now = Date.parse(nowIso);
   for (const [k, first] of firstTs) {
     const tool = k.startsWith("codex:") ? "codex" : "claude";
-    const auth = authNow[tool];
+    const auth = authFor(tool, cwdOf.get(k) || "");
     if (!auth) continue;
     const list = stamps[k];
     if (!list || !list.length) {
@@ -172,7 +181,7 @@ export function buildBuckets(entries: Entry[], opts: BuildOpts): Bucket[] {
     const stamp = stampFor(opts.stamps[`${rec.tool}:${file.sessionId}`], rec.ts);
     if (!stamp) continue;
     const a = stamp.auth;
-    const repo = file.cwd || (rec.tool === "claude" ? slugToCwd(file.slug) : "");
+    const repo = fileCwd(file, rec.tool);
     const proto = {
       tool: rec.tool,
       sessionId: file.sessionId,

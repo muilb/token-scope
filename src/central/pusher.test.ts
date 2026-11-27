@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as path from "path";
 import { UsageStore, Entry } from "../core/usageStore";
 import { AccountIdentity } from "../readers/identity";
-import { currentAuth, buildBuckets, updateStamps, StampMap, bucketKey } from "./buckets";
+import { currentAuth, buildBuckets, updateStamps, StampMap, bucketKey, AuthResolver, fileCwd } from "./buckets";
 import { tick, planPush, loadState, KeyValueStore, PushConfig, Poster, SECRET_RE, BATCH_SIZE } from "./pusher";
 
 const HOME = path.join(process.cwd(), "test", "fixtures", "home");
@@ -46,8 +46,8 @@ const ID_APIKEY: AccountIdentity = {
 };
 const ID_UNKNOWN: AccountIdentity = { claude: { authType: "unknown" }, codex: { authType: "unknown" }, osUser: "dev1" };
 
-function authNow(id: AccountIdentity, owner = "") {
-  return { claude: currentAuth("claude", id, owner, "PC-A"), codex: currentAuth("codex", id, owner, "PC-A") };
+function authNow(id: AccountIdentity, owner = ""): AuthResolver {
+  return (tool) => currentAuth(tool, id, owner, "PC-A");
 }
 
 const cfg: PushConfig = { url: "http://srv", ingestKey: "k", osUser: "dev1", hostname: "PC-A" };
@@ -66,7 +66,7 @@ function input(id: AccountIdentity, extra: Partial<{ entries: Entry[]; nowIso: s
   return {
     entries: extra.entries ?? entries(),
     windowStart: "2026-11-01",
-    authNow: authNow(id, extra.owner),
+    authFor: authNow(id, extra.owner),
     projectMap: {},
     nowIso: extra.nowIso ?? NOW,
   };
@@ -90,6 +90,24 @@ test("API-key usage is attributed to the owner setting, else OS user @ host", ()
 
 test("unknown auth (credentials mid-rewrite) → no identity → held", () => {
   assert.equal(currentAuth("claude", ID_UNKNOWN, "", "PC-A"), null);
+});
+
+test("auth is resolved per project directory: two projects, two API keys", () => {
+  const stamps: StampMap = {};
+  // Move session bbbb into a second project directory.
+  const e = entries().map((x) =>
+    x.file.sessionId.startsWith("bbbb") ? { ...x, file: { ...x.file, cwd: "D:\\Work\\other-app" } } : x,
+  );
+  const cwds = [...new Set(e.filter((x) => x.rec.tool === "claude").map((x) => fileCwd(x.file, "claude")))];
+  assert.equal(cwds.length, 2);
+  const keyOf = (cwd: string) => (cwd === "D:\\Work\\other-app" ? "bbbb2222" : "aaaa1111");
+  const authFor: AuthResolver = (tool, cwd) =>
+    tool === "codex" ? null : { memberKey: "owner:dev1@example.com", authType: "apikey", plan: "apikey", keyHash: keyOf(cwd) };
+  updateStamps(stamps, e, authFor, NOW);
+  const b = buildBuckets(e, { stamps, projectMap: {} });
+  const hashes = new Set(b.filter((x) => x.tool === "claude").map((x) => x.auth.keyHash));
+  assert.deepEqual([...hashes].sort(), ["aaaa1111", "bbbb2222"]);
+  assert.ok(!b.some((x) => x.tool === "codex"), "codex unknown → held");
 });
 
 // ---------------------------------------------------------------------------

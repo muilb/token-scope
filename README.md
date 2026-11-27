@@ -54,7 +54,7 @@ click the cost in the status bar to open the full panel in an editor column.
 | `tokenscope.central.url` | `""` | Central server base URL (LAN/VPN only), e.g. `http://server:8787`. |
 | `tokenscope.central.ingestKey` | `""` | Shared internal token sent as `X-Ingest-Key`. **Not** your Claude/OpenAI key. |
 | `tokenscope.central.pushIntervalMin` | `1` | Push interval (minutes); only changed totals are sent. Prices are synced on the same timer. |
-| `tokenscope.central.backfillDays` | `30` | Days kept in sync with the server. The first run after enabling (or upgrading to 0.7) sends the whole window. |
+| `tokenscope.central.backfillDays` | `30` | Days kept in sync with the server. The first run after enabling (or upgrading to 0.8) sends the whole window. |
 | `tokenscope.owner` | `""` | Member identity for **API-key** usage — use your company email. Subscription logins are identified by their account automatically. Empty = OS user @ host. |
 | `tokenscope.projectMap` | `{}` | Map a repo path/slug or `key:<hash>` to an enterprise project name. |
 
