@@ -13,6 +13,7 @@ import * as os from "os";
 import * as path from "path";
 import * as crypto from "crypto";
 import { CLAUDE_HOME, CODEX_HOME } from "../pricing";
+import { HelperAuth, resolveHelperAuth } from "./apiKeyHelper";
 
 export interface ClaudeIdentity {
   authType: "oauth" | "apikey" | "unknown";
@@ -105,6 +106,37 @@ export function deriveClaude(
   return { authType: "unknown", orgId, orgShort: orgId ? orgId.slice(0, 8) : undefined };
 }
 
+/**
+ * Pure: derive Claude identity for one project directory, honouring the
+ * project's `apiKeyHelper` (08 §6 / this file's sibling apiKeyHelper.ts).
+ *
+ * Precedence, deliberately keeping the env path first so machines that export
+ * ANTHROPIC_API_KEY directly behave exactly as before:
+ *   1. env key            → apikey (unchanged)
+ *   2. helper → env var   → apikey with that var's hash
+ *   3. helper === ""      → the project explicitly runs on the subscription:
+ *                           fall through to the credential file (→ oauth)
+ *   4. no helper declared → fall through to the credential file (unchanged)
+ *   5. helper unusable    → "unknown", which the pusher HOLDS rather than drops,
+ *                           so a misconfigured helper delays data, never loses it
+ */
+export function deriveClaudeForCwd(
+  env: NodeJS.ProcessEnv,
+  cred: any | null,
+  helper: HelperAuth,
+): ClaudeIdentity {
+  if (env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN) return deriveClaude(env, cred);
+  if (helper.kind === "apikey") {
+    return {
+      authType: "apikey",
+      keyHash: helper.keyHash,
+      proxy: env.ANTHROPIC_BASE_URL ? true : undefined,
+    };
+  }
+  if (helper.kind === "unresolved") return { authType: "unknown" };
+  return deriveClaude(env, cred); // "subscription" and "none" read the cred file
+}
+
 /** Pure: derive Codex identity from parsed auth.json (null if absent). */
 export function deriveCodex(auth: any | null): CodexIdentity {
   if (!auth) return { authType: "unknown" };
@@ -151,4 +183,34 @@ export function _resetIdentityCache(): void {
   _cache = null;
   _claudeMtime = -1;
   _codexMtime = -1;
+  _credCache = null;
+  _credMtime = -1;
+}
+
+// Credential file, cached by mtime — claudeIdentityForCwd() is called once per
+// delta, and re-parsing the same JSON for every session would be wasteful.
+let _credCache: any | null = null;
+let _credMtime = -1;
+
+function cachedCred(): any | null {
+  const m = mtimeOf(CLAUDE_CRED);
+  if (m !== _credMtime) {
+    _credCache = readJson(CLAUDE_CRED);
+    _credMtime = m;
+  }
+  return _credCache;
+}
+
+/**
+ * Live per-project Claude identity, for the pusher. `mtime` is the settings
+ * file that supplied the apiKeyHelper (0 if none) — the caller folds it into
+ * the delta's confidence window, so switching helper mid-session is treated as
+ * ambiguous attribution just like an OAuth refresh is.
+ */
+export function claudeIdentityForCwd(cwd: string): { identity: ClaudeIdentity; mtime: number } {
+  const helper = resolveHelperAuth(cwd, process.env);
+  return {
+    identity: deriveClaudeForCwd(process.env, cachedCred(), helper),
+    mtime: helper.mtime,
+  };
 }

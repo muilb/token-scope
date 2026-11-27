@@ -14,7 +14,7 @@ import { computeCost, CLAUDE_HOME, CODEX_HOME } from "../pricing";
 import { slugToCwd } from "../readers/claudeLive";
 import { scanCodexSessions } from "../readers/codexReader";
 import { localDay } from "../util";
-import { AccountIdentity } from "../readers/identity";
+import { AccountIdentity, ClaudeIdentity, CodexIdentity } from "../readers/identity";
 import { resolveProject, ProjectMap } from "../identity/projectMap";
 import { CursorStore, Cursor } from "./cursor";
 
@@ -56,6 +56,13 @@ export interface BuildCtx {
   projectMap: ProjectMap;
   authMtimes: { claude: number; codex: number };
   now?: number;
+  /**
+   * Per-project Claude auth, honouring the project's `apiKeyHelper` (each
+   * project may draw its key from a different env var). Injected so tests can
+   * drive it; when absent, every delta falls back to the global identity, which
+   * is the pre-0.7.0 behaviour.
+   */
+  claudeAuthFor?: (cwd: string) => { identity: ClaudeIdentity; mtime: number };
 }
 
 /**
@@ -79,19 +86,19 @@ function confidenceFor(authMtime: number, tsFrom?: string, tsTo?: string): Delta
   return "confirmed";
 }
 
-function claudeAuth(id: AccountIdentity, confidence: DeltaAuth["confidence"]): DeltaAuth {
+function claudeAuth(c: ClaudeIdentity, confidence: DeltaAuth["confidence"]): DeltaAuth {
   return {
-    authType: id.claude.authType,
-    keyHash: id.claude.keyHash,
-    orgShort: id.claude.orgShort,
+    authType: c.authType,
+    keyHash: c.keyHash,
+    orgShort: c.orgShort,
     confidence,
   };
 }
 
-function codexAuth(id: AccountIdentity, confidence: DeltaAuth["confidence"]): DeltaAuth {
+function codexAuth(c: CodexIdentity, confidence: DeltaAuth["confidence"]): DeltaAuth {
   return {
-    authType: id.codex.authType,
-    keyHash: id.codex.keyHash,
+    authType: c.authType,
+    keyHash: c.keyHash,
     orgShort: undefined,
     confidence,
   };
@@ -234,7 +241,12 @@ function readClaudeSession(
   }
 
   const cwdResolved = cwd || slugToCwd(slug);
-  const confidence = confidenceFor(ctx.authMtimes.claude, tsFrom, tsTo);
+  // Auth is resolved per project: with apiKeyHelper, two sessions running at the
+  // same moment can legitimately bill to two different keys.
+  const perProject = ctx.claudeAuthFor?.(cwdResolved);
+  const claudeId = perProject?.identity ?? ctx.identity.claude;
+  const authMtime = Math.max(ctx.authMtimes.claude, perProject?.mtime ?? 0);
+  const confidence = confidenceFor(authMtime, tsFrom, tsTo);
 
   return {
     sessionId,
@@ -243,7 +255,7 @@ function readClaudeSession(
     eventTsFrom: tsFrom,
     eventTsTo: tsTo,
     date: localDay(tsTo) || localDay(new Date().toISOString()),
-    auth: claudeAuth(ctx.identity, confidence),
+    auth: claudeAuth(claudeId, confidence),
     project: resolveProject(cwdResolved, undefined, ctx.projectMap),
     repo: cwdResolved,
     model,
@@ -251,7 +263,7 @@ function readClaudeSession(
     costEstimate: computeCost(input, output, cacheRead, cacheWrite, model),
     _nextByteOffset: size,
     _nextMsgKey: lastMsgKey,
-    _authMtime: ctx.authMtimes.claude,
+    _authMtime: authMtime,
   };
 }
 
@@ -314,7 +326,7 @@ export function collectCodexDeltas(store: CursorStore, ctx: BuildCtx): Delta[] {
       eventTsFrom: sess.started_at,
       eventTsTo: sess.last_seen,
       date: sess.date || localDay(sess.last_seen),
-      auth: codexAuth(ctx.identity, confidence),
+      auth: codexAuth(ctx.identity.codex, confidence),
       project: resolveProject(repo, ctx.identity.codex.keyHash, ctx.projectMap),
       repo,
       model,

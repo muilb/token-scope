@@ -26,6 +26,41 @@ Mặc định lắng nghe `http://127.0.0.1:8787`. Dashboard: mở `/` trên tr�
 `INGEST_KEY` là token nội bộ do team tự phát/đổi — **KHÔNG** phải secret của Claude/OpenAI.
 `ADMIN_KEY` chỉ phát cho người quản trị (đừng đưa cho member) — member chỉ cần `INGEST_KEY`.
 
+### Chạy cùng Windows (Task Scheduler, không cần admin)
+
+Chạy `npm start` trong terminal hay background task của một phiên chat thì server
+**chết theo phiên đó** (đóng VS Code, reboot, phiên chat nghỉ…). Để nó tự sống:
+
+- `start-server.cmd` — launcher: `cd` vào thư mục server, log ra `data\server.log`
+  (xoay vòng khi >20 MB lúc khởi động), tự tìm `node`.
+- `start-server-hidden.vbs` — bọc `.cmd` để **không hiện cửa sổ console** khi đăng nhập.
+
+Đăng ký task (PowerShell, chạy dưới user thường):
+
+```powershell
+$dir = (Resolve-Path .\server).Path      # hoặc đường dẫn tuyệt đối tới server/
+$user = "$env:USERDOMAIN\$env:USERNAME"
+Register-ScheduledTask -TaskName 'TokenScope Central Server' `
+  -Action    (New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "//B //Nologo `"$dir\start-server-hidden.vbs`"" -WorkingDirectory $dir) `
+  -Trigger   (New-ScheduledTaskTrigger -AtLogOn -User $user) `
+  -Principal (New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited) `
+  -Settings  (New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd)
+Start-ScheduledTask -TaskName 'TokenScope Central Server'
+```
+
+Lưu ý:
+- `-ExecutionTimeLimit 0` là **bắt buộc** — mặc định Task Scheduler giết task sau 72 giờ.
+- Trigger *At logon* (không phải *At startup*) vì user thường không được tạo task chạy
+  khi chưa đăng nhập (S4U bị *Access is denied*). Có admin thì đổi sang `-AtStartup` + `-LogonType S4U`.
+- Task ở trạng thái **Ready** ngay sau khi chạy (wscript khởi chạy xong là thoát; node chạy tách rời),
+  nên `Stop-ScheduledTask` **không** dừng được server. Dừng server:
+  ```powershell
+  Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object CommandLine -like '*server.js*' | ForEach-Object { Stop-Process -Id $_.ProcessId }
+  ```
+  Khởi động lại: `Start-ScheduledTask -TaskName 'TokenScope Central Server'`. Gọi khi server đang chạy
+  thì instance thứ 2 thoát ngay vì trùng cổng (ghi `server exited with code 1` vào log) — vô hại.
+- Gỡ: `Unregister-ScheduledTask -TaskName 'TokenScope Central Server' -Confirm:$false`.
+
 ## Endpoints
 
 - `POST /api/v1/usage` — nhận deltas (idempotent theo `(osUser,hostname,tool,sessionId,seq)`).

@@ -8,7 +8,7 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import { CLAUDE_HOME, CODEX_HOME } from "../pricing";
-import { readIdentity, authFileMtimes } from "../readers/identity";
+import { readIdentity, authFileMtimes, claudeIdentityForCwd } from "../readers/identity";
 import { ProjectMap } from "../identity/projectMap";
 import { CursorStore } from "./cursor";
 import { BuildCtx } from "./deltas";
@@ -66,6 +66,7 @@ function buildCtx(): BuildCtx {
     identity: readIdentity(),
     projectMap: cfg().get<ProjectMap>("projectMap", {}),
     authMtimes: authFileMtimes(),
+    claudeAuthFor: claudeIdentityForCwd,
   };
 }
 

@@ -2,7 +2,7 @@
   "name": "codetokens-monitor",
   "displayName": "CodeTokens Monitor",
   "description": "Live token usage and cost dashboard for AI coding assistants, shown natively in a VS Code panel.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "toomo",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -141,7 +141,7 @@
     "compile": "node esbuild.js",
     "test": "node test.js",
     "watch": "node esbuild.js --watch",
-    "package": "node esbuild.js --production && vsce package --allow-missing-repository -o codetokens-monitor-0.5.0.vsix",
+    "package": "node esbuild.js --production && vsce package --allow-missing-repository",
     "vscode:prepublish": "node esbuild.js --production"
   },
   "devDependencies": {
